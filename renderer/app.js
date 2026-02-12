@@ -268,7 +268,7 @@ function normalizeRuntimeSettings(config = {}) {
     aiCommand: normalizeAiCommand(config.aiCommand),
     heartbeatEnabled: config.heartbeatEnabled !== false,
     heartbeatIntervalMs: normalizeHeartbeatIntervalMs(config.heartbeatIntervalMs),
-    heartbeatPreferSessionAi: false
+    heartbeatPreferSessionAi: config.heartbeatPreferSessionAi !== false
   };
 }
 
@@ -810,7 +810,7 @@ async function loadRuntimeSettings() {
       aiCommand: 'codex -m gpt-5.3-codex',
       heartbeatEnabled: true,
       heartbeatIntervalMs: 10 * 60 * 1000,
-      heartbeatPreferSessionAi: false
+      heartbeatPreferSessionAi: true
     });
     aiCommand = fallback.aiCommand;
     applyQuickSettings(fallback);
@@ -1083,11 +1083,7 @@ registerApiListener('onTerminalConfirmNeeded', ({ tabId, prompt }) => {
     analysis: compactPrompt || '请查看该会话最新输出并决定下一步。',
     at: new Date().toISOString()
   });
-  const message = compactPrompt
-    ? `会话“${tabData.title}”需要确认：${compactPrompt}`
-    : `会话“${tabData.title}”检测到确认信息，请查看最新输出。`;
-
-  showNonBlockingNotice('需要确认', message);
+  debugLog(`[heartbeat][confirm-signal] ${tabData.title}: ${compactPrompt || 'waiting for input'}`);
 });
 
 registerApiListener('onTopicStatus', ({ tabId, status, topic }) => {

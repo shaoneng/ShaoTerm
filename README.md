@@ -44,13 +44,17 @@ xattr -dr com.apple.quarantine /Applications/ShaoTerm.app
 
 首次启动时会弹出设置窗口，请填写：
 
-- **默认 AI 命令**：例如 `codex`、`claude`
-- **Base URL**：你的 Claude API 地址（例如 `https://api.anthropic.com`）
-- **API Key**：你的 API 密钥
+- **默认 AI 命令**：例如 `codex -m gpt-5.2-codex`、`claude`
+- **Base URL**：
+  - Anthropic 直连：`https://api.anthropic.com`
+  - VibeProxy 本地代理：`http://localhost:8317`
+- **API Key**：
+  - Anthropic 模式填写 API Key
+  - VibeProxy 模式可留空（使用本地 OAuth 凭证）
 
 之后也可以通过标签栏右侧的"设置"按钮修改。
 
-> API 仅用于标签自动命名功能（使用 claude-3-5-haiku 模型）。每次命名约花费 $0.001。终端会话本身使用你本地的 CLI（如 `codex`/`claude`），与该 API 无关。
+> 新版支持 OpenAI-compatible 代理（如 VibeProxy）。当 Base URL 指向本地代理且默认命令是 Codex/GPT 模型时，标签命名与心跳汇总会优先通过该代理执行；失败时自动回退到本地规则摘要。
 
 ### 3. 使用
 
@@ -71,7 +75,8 @@ xattr -dr com.apple.quarantine /Applications/ShaoTerm.app
 
 - **macOS** 10.13+ 或 **Windows** 10+
 - 已安装 [Codex CLI](https://github.com/openai/codex) 或 [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
-- Anthropic API Key（用于智能标签命名功能）
+- 可选：Anthropic API Key（Anthropic 直连模式）
+- 若使用 VibeProxy：需先完成 VibeProxy 的 Codex OAuth 登录
 
 ## 技术栈
 
