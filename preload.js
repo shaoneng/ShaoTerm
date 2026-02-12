@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('api', {
   onTerminalClosed: (callback) => {
     ipcRenderer.on('terminal:closed', (event, payload) => callback(payload));
   },
+  onTerminalConfirmNeeded: (callback) => {
+    ipcRenderer.on('terminal:confirm-needed', (event, payload) => callback(payload));
+  },
 
   // Topic detection
   refreshTopics: () => ipcRenderer.invoke('topic:refresh'),

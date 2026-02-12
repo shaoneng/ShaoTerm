@@ -5,6 +5,45 @@ const topicDetector = require('./lib/topic-detector');
 
 let win;
 const terminals = new Map();
+const confirmAlertAt = new Map();
+const CONFIRM_ALERT_COOLDOWN_MS = 10000;
+
+const CONFIRM_PROMPT_PATTERNS = [
+  /\b(y\/n|yes\/no|y\/N|Y\/n)\b/,
+  /are you sure/i,
+  /do you want to continue/i,
+  /\bproceed\?/i,
+  /confirm/i,
+  /继续\?/,
+  /是否继续/,
+  /是否确认/,
+  /请确认/,
+  /确认\?/
+];
+
+function stripAnsiForDetection(str) {
+  return str
+    .replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')
+    .replace(/\x1B\][^\x07]*\x07/g, '')
+    .replace(/[\x00-\x09\x0B-\x1F]/g, '');
+}
+
+function shouldNotifyConfirmPrompt(tabId, plainText) {
+  const normalized = (plainText || '').trim();
+  if (!normalized) return false;
+
+  const matched = CONFIRM_PROMPT_PATTERNS.some((pattern) => pattern.test(normalized));
+  if (!matched) return false;
+
+  const now = Date.now();
+  const lastAt = confirmAlertAt.get(tabId) || 0;
+  if (now - lastAt < CONFIRM_ALERT_COOLDOWN_MS) {
+    return false;
+  }
+
+  confirmAlertAt.set(tabId, now);
+  return true;
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -94,6 +133,14 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     if (entry.buffer.length > 4000) {
       entry.buffer = entry.buffer.slice(-4000);
     }
+
+    const plain = stripAnsiForDetection(data);
+    if (shouldNotifyConfirmPrompt(tabId, plain) && win && !win.isDestroyed()) {
+      win.webContents.send('terminal:confirm-needed', {
+        tabId,
+        prompt: plain.slice(-160).trim()
+      });
+    }
   });
 
   ptyProcess.onExit(({ exitCode }) => {
@@ -150,6 +197,7 @@ ipcMain.handle('terminal:close', (event, { tabId }) => {
     }
     terminals.delete(tabId);
   }
+  confirmAlertAt.delete(tabId);
   return { tabId };
 });
 

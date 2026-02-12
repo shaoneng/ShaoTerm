@@ -420,6 +420,28 @@ window.api.onTerminalClosed(({ tabId }) => {
   }
 });
 
+window.api.onTerminalConfirmNeeded(async ({ tabId, prompt }) => {
+  const tabData = tabs.find((t) => t.id === tabId);
+  if (!tabData) return;
+
+  const message = `会话“${tabData.title}”检测到确认提示`;
+  const detail = `${prompt ? `提示内容：${prompt}\n\n` : ''}请切换到该会话并在终端中输入确认选项（如 y/yes）。`;
+
+  let confirmed = false;
+  try {
+    const result = await window.api.confirmDialog('需要确认', message, detail);
+    confirmed = !!(result && result.confirmed);
+  } catch (err) {
+    console.warn('Failed to show confirm-needed popup:', err);
+    confirmed = window.confirm(`${message}\n${detail}`);
+  }
+
+  if (confirmed) {
+    switchToTabById(tabId);
+    terminalManager.focus(tabId);
+  }
+});
+
 window.api.onTopicStatus(({ tabId, status, topic }) => {
   const tabData = tabs.find((t) => t.id === tabId);
   if (tabData && !tabData.manuallyRenamed) {
