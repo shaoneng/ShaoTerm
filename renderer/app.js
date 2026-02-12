@@ -71,7 +71,7 @@ let activeTabId = null;
 // DOM references
 const tabBar = document.getElementById('tab-bar');
 const btnAddTerminal = document.getElementById('btn-add-terminal');
-const btnAddClaude = document.getElementById('btn-add-claude');
+const btnAddAi = document.getElementById('btn-add-ai');
 const terminalContainer = document.getElementById('terminal-container');
 const btnRefresh = document.getElementById('btn-refresh');
 const btnCopyLogs = document.getElementById('btn-copy-logs');
@@ -79,10 +79,12 @@ const btnTheme = document.getElementById('btn-theme');
 const btnSettings = document.getElementById('btn-settings');
 const btnScrollBottom = document.getElementById('btn-scroll-bottom');
 const settingsModal = document.getElementById('settings-modal');
+const settingsAiCommand = document.getElementById('settings-ai-command');
 const settingsBaseUrl = document.getElementById('settings-base-url');
 const settingsApiKey = document.getElementById('settings-api-key');
 const btnSettingsSave = document.getElementById('btn-settings-save');
 const btnSettingsCancel = document.getElementById('btn-settings-cancel');
+let aiCommand = 'codex';
 
 // --- Tab Management ---
 
@@ -90,11 +92,16 @@ function generateTabId() {
   return Date.now().toString() + Math.random().toString(36).slice(2, 6);
 }
 
+function normalizeAiCommand(value) {
+  const normalized = (value || '').trim();
+  return normalized || 'codex';
+}
+
 async function createNewTab(autoCommand) {
   let cwd = null;
   let dirName = '终端';
 
-  // Only show directory picker for Claude tabs
+  // Only show directory picker for AI tabs
   if (autoCommand) {
     const result = await window.api.selectDirectory();
     if (result.canceled) return;
@@ -158,6 +165,10 @@ async function createNewTab(autoCommand) {
   await window.api.createTerminal(tabId, cwd, autoCommand || null);
   window.api.resizeTerminal(tabId, cols, rows);
   terminalManager.focus(tabId);
+}
+
+async function createNewAiTab() {
+  await createNewTab(aiCommand);
 }
 
 function switchToTabById(tabId) {
@@ -344,12 +355,25 @@ Language: ${navigator.language}
 
 // --- Settings Modal ---
 
+async function loadRuntimeSettings() {
+  try {
+    const config = await window.api.getSettings();
+    aiCommand = normalizeAiCommand(config.aiCommand);
+    return config;
+  } catch (err) {
+    console.warn('Failed to load runtime settings:', err);
+    aiCommand = 'codex';
+    return { apiKey: '', baseUrl: '', aiCommand };
+  }
+}
+
 async function openSettings() {
-  const config = await window.api.getSettings();
+  const config = await loadRuntimeSettings();
+  settingsAiCommand.value = normalizeAiCommand(config.aiCommand);
   settingsBaseUrl.value = config.baseUrl || '';
   settingsApiKey.value = config.apiKey || '';
   settingsModal.classList.remove('hidden');
-  settingsBaseUrl.focus();
+  settingsAiCommand.focus();
 }
 
 function closeSettings() {
@@ -357,12 +381,12 @@ function closeSettings() {
 }
 
 async function saveSettings() {
+  const command = normalizeAiCommand(settingsAiCommand.value);
   const baseUrl = settingsBaseUrl.value.trim();
   const apiKey = settingsApiKey.value.trim();
-  if (apiKey) {
-    await window.api.saveSettings(apiKey, baseUrl);
-    closeSettings();
-  }
+  aiCommand = command;
+  await window.api.saveSettings(apiKey, baseUrl, command);
+  closeSettings();
 }
 
 // --- IPC Listeners ---
@@ -400,7 +424,7 @@ window.api.onFileDrop(({ paths }) => {
 
 console.log('Setting up shortcut listeners...');
 
-window.api.onNewTab(() => createNewTab('claude'));
+window.api.onNewTab(() => createNewAiTab());
 window.api.onCloseTab(() => { if (activeTabId) closeTab(activeTabId); });
 window.api.onRefreshTopics(() => refreshAllTopics());
 window.api.onSwitchTab(({ index }) => switchToTabByIndex(index));
@@ -430,7 +454,7 @@ console.log('Shortcut listeners set up complete');
 // --- Button Listeners ---
 
 btnAddTerminal.addEventListener('click', () => createNewTab());
-btnAddClaude.addEventListener('click', () => createNewTab('claude'));
+btnAddAi.addEventListener('click', () => createNewAiTab());
 btnRefresh.addEventListener('click', () => refreshAllTopics());
 btnCopyLogs.addEventListener('click', () => copyLogsToClipboard());
 btnTheme.addEventListener('click', () => toggleTheme());
@@ -472,4 +496,4 @@ setInterval(() => {
 // Initialize theme based on system preference
 initTheme();
 
-createNewTab('claude');
+loadRuntimeSettings().finally(() => createNewAiTab());

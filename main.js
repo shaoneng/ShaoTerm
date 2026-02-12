@@ -174,8 +174,8 @@ ipcMain.handle('settings:get', () => {
   return topicDetector.getConfig();
 });
 
-ipcMain.handle('settings:save', (event, { apiKey, baseUrl }) => {
-  topicDetector.configure(apiKey, baseUrl);
+ipcMain.handle('settings:save', (event, { apiKey, baseUrl, aiCommand }) => {
+  topicDetector.configure(apiKey, baseUrl, aiCommand);
   return { success: true };
 });
 
@@ -199,7 +199,7 @@ function buildMenu() {
       label: '文件',
       submenu: [
         {
-          label: '新建标签页',
+          label: '新建 AI 标签页',
           accelerator: 'CmdOrCtrl+T',
           click: () => {
             if (win) win.webContents.send('shortcut:new-tab');

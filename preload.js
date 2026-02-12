@@ -31,7 +31,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
-  saveSettings: (apiKey, baseUrl) => ipcRenderer.invoke('settings:save', { apiKey, baseUrl }),
+  saveSettings: (apiKey, baseUrl, aiCommand) => ipcRenderer.invoke('settings:save', { apiKey, baseUrl, aiCommand }),
 
   // Shortcuts (main -> renderer)
   onNewTab: (callback) => {

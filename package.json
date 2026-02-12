@@ -1,7 +1,7 @@
 {
   "name": "dontbeterm",
   "version": "1.1.0",
-  "description": "Claude Code multi-session manager with smart tab naming",
+  "description": "AI coding CLI multi-session manager with smart tab naming",
   "main": "main.js",
   "scripts": {
     "start": "electron .",

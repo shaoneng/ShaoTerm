@@ -21,7 +21,7 @@
   <!-- Tab Bar -->
   <div id="tab-bar">
     <button id="btn-add-terminal" title="新建终端">+</button>
-    <button id="btn-add-claude" title="新建 Claude">C+</button>
+    <button id="btn-add-ai" title="新建 AI 会话">AI+</button>
   </div>
 
   <!-- Terminal Container -->
@@ -34,6 +34,8 @@
   <div id="settings-modal" class="modal hidden">
     <div class="modal-content">
       <h3>API 设置</h3>
+      <label class="modal-label">默认 AI 命令</label>
+      <input type="text" id="settings-ai-command" placeholder="codex">
       <label class="modal-label">Base URL</label>
       <input type="text" id="settings-base-url" placeholder="https://api.anthropic.com">
       <label class="modal-label">API Key</label>

@@ -210,7 +210,7 @@ body {
 }
 
 #btn-add-terminal,
-#btn-add-claude {
+#btn-add-ai {
   width: 28px;
   height: 28px;
   min-width: 28px;
@@ -228,7 +228,7 @@ body {
 }
 
 #btn-add-terminal:hover,
-#btn-add-claude:hover {
+#btn-add-ai:hover {
   background: var(--hover);
   color: var(--text-primary);
 }
