@@ -379,32 +379,6 @@ body {
   display: block;
 }
 
-.session-error-state {
-  width: 100%;
-  height: 100%;
-  border-radius: var(--terminal-surface-radius);
-  border: 0.5px solid color-mix(in srgb, var(--danger) 42%, var(--border));
-  background: color-mix(in srgb, var(--bg-primary) 82%, var(--bg-secondary));
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: var(--space-sm);
-  padding: clamp(18px, 2.4vw, 30px);
-}
-
-.session-error-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--danger);
-}
-
-.session-error-detail {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  max-width: 760px;
-}
-
 .terminal-surface {
   width: 100%;
   height: 100%;
@@ -634,7 +608,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
-  z-index: 12000;
+  z-index: 3000;
   pointer-events: none;
 }
 
