@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('api', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (apiKey, baseUrl, aiCommand, heartbeat) =>
     ipcRenderer.invoke('settings:save', { apiKey, baseUrl, aiCommand, heartbeat }),
+  queryHeartbeatArchive: (options) => ipcRenderer.invoke('heartbeat:query', options || {}),
+  summarizeHeartbeatArchive: (options) => ipcRenderer.invoke('heartbeat:summarize', options || {}),
 
   // Shortcuts (main -> renderer)
   onNewTab: (callback) => {
@@ -51,6 +53,9 @@ contextBridge.exposeInMainWorld('api', {
   },
   onRefreshTopics: (callback) => {
     ipcRenderer.on('shortcut:refresh-topics', () => callback());
+  },
+  onShowHeartbeatArchive: (callback) => {
+    ipcRenderer.on('shortcut:show-heartbeat-archive', () => callback());
   },
   onSwitchTab: (callback) => {
     ipcRenderer.on('shortcut:switch-tab', (event, payload) => callback(payload));

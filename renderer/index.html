@@ -21,14 +21,6 @@
       <button id="btn-add-ai" title="新建 AI 会话">AI+</button>
     </div>
     <div id="tab-quick-settings">
-      <label class="tab-quick-group" for="quick-model-select">
-        <span class="tab-quick-label">模型</span>
-        <select id="quick-model-select" class="tab-quick-select" title="默认模型">
-          <option value="GPT-5.3-Codex">GPT-5.3-Codex</option>
-          <option value="GPT-5-Codex">GPT-5-Codex</option>
-          <option value="GPT-4.1">GPT-4.1</option>
-        </select>
-      </label>
       <div class="tab-quick-group tab-quick-group-heartbeat">
         <span class="tab-quick-label">心跳</span>
         <label class="tab-heartbeat-switch" title="启用心跳">
@@ -62,19 +54,6 @@
       <input type="text" id="settings-base-url" placeholder="https://api.anthropic.com">
       <label class="modal-label">API Key</label>
       <input type="password" id="settings-api-key" placeholder="sk-...">
-      <h4 class="modal-section-title">心跳设置</h4>
-      <label class="modal-check">
-        <input type="checkbox" id="settings-heartbeat-enabled" checked>
-        <span>启用会话心跳总结</span>
-      </label>
-      <label class="modal-label">心跳间隔</label>
-      <select id="settings-heartbeat-interval">
-        <option value="1">1 分钟</option>
-        <option value="3">3 分钟</option>
-        <option value="5">5 分钟</option>
-        <option value="10">10 分钟</option>
-      </select>
-      <div class="modal-help">心跳总结将后台自动执行，无需手动按回车输入。</div>
       <div class="modal-buttons">
         <button id="btn-settings-save">保存</button>
         <button id="btn-settings-cancel" class="btn-secondary">取消</button>

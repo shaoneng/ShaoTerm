@@ -32,6 +32,9 @@
   --space-lg: 24px;
   --space-xl: 32px;
   --composer-reserved: 18px;
+  --terminal-gutter-x: clamp(10px, 1.3vw, 20px);
+  --terminal-gutter-y: clamp(8px, 1vh, 16px);
+  --terminal-surface-radius: clamp(10px, 1.1vmin, 14px);
 
   /* Border Radius */
   --radius-sm: 4px;
@@ -321,6 +324,7 @@ body {
   min-height: 0;
   position: relative;
   overflow: hidden;
+  padding: var(--terminal-gutter-y) var(--terminal-gutter-x);
   background: color-mix(in srgb, var(--bg-secondary) 64%, var(--bg-primary));
 }
 
@@ -328,7 +332,8 @@ body {
   width: 100%;
   height: 100%;
   display: none;
-  padding: 0;
+  border-radius: var(--terminal-surface-radius);
+  overflow: hidden;
 }
 
 .terminal-wrapper.active {
@@ -338,7 +343,7 @@ body {
 .terminal-surface {
   width: 100%;
   height: 100%;
-  border-radius: 0;
+  border-radius: var(--terminal-surface-radius);
   border: none;
   overflow: hidden;
   background: transparent;
@@ -755,9 +760,26 @@ body {
 @media (max-width: 900px) {
   :root {
     --composer-reserved: 14px;
+    --terminal-gutter-x: clamp(8px, 2.2vw, 12px);
+    --terminal-gutter-y: clamp(6px, 1.6vh, 10px);
+    --terminal-surface-radius: 10px;
   }
 
   .tab-quick-label {
     display: none;
+  }
+}
+
+@media (max-height: 760px) {
+  :root {
+    --terminal-gutter-y: clamp(6px, 0.9vh, 10px);
+  }
+}
+
+@media (min-width: 1680px) and (min-height: 920px) {
+  :root {
+    --terminal-gutter-x: clamp(14px, 1.4vw, 24px);
+    --terminal-gutter-y: clamp(10px, 1.1vh, 18px);
+    --terminal-surface-radius: clamp(12px, 1.1vmin, 16px);
   }
 }

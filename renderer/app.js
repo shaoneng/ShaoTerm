@@ -65,9 +65,11 @@ console.log('Debug logging system initialized');
 // --- App State ---
 
 const terminalManager = new TerminalManager();
-const tabs = []; // { id, title, manuallyRenamed }
+const tabs = []; // { id, title, manuallyRenamed, cwd, autoCommand }
 let activeTabId = null;
 let inAppNoticeContainer = null;
+const TAB_SNAPSHOT_KEY = 'shaoterm.tab-snapshot.v1';
+let isRestoringTabs = false;
 
 // DOM references
 const tabBar = document.getElementById('tab-bar');
@@ -80,33 +82,12 @@ const settingsModal = document.getElementById('settings-modal');
 const settingsAiCommand = document.getElementById('settings-ai-command');
 const settingsBaseUrl = document.getElementById('settings-base-url');
 const settingsApiKey = document.getElementById('settings-api-key');
-const settingsHeartbeatEnabled = document.getElementById('settings-heartbeat-enabled');
-const settingsHeartbeatInterval = document.getElementById('settings-heartbeat-interval');
 const btnSettingsSave = document.getElementById('btn-settings-save');
 const btnSettingsCancel = document.getElementById('btn-settings-cancel');
-const quickModelSelect = document.getElementById('quick-model-select');
 const quickHeartbeatEnabled = document.getElementById('quick-heartbeat-enabled');
 const quickHeartbeatInterval = document.getElementById('quick-heartbeat-interval');
 let aiCommand = 'codex';
-const MODEL_PRESETS = ['GPT-5.3-Codex', 'GPT-5-Codex', 'GPT-4.1'];
-const MODEL_COMMAND_BY_LABEL = {
-  'GPT-5.3-Codex': 'codex -m gpt-5.3-codex',
-  'GPT-5-Codex': 'codex -m gpt-5-codex',
-  'GPT-4.1': 'codex -m gpt-4.1'
-};
 const HEARTBEAT_INTERVAL_OPTIONS = ['1', '3', '5', '10'];
-
-function resolveModelFromCommand(command) {
-  const normalized = String(command || '').toLowerCase();
-  if (normalized.includes('gpt-5.3-codex')) return 'GPT-5.3-Codex';
-  if (normalized.includes('gpt-5-codex')) return 'GPT-5-Codex';
-  if (normalized.includes('gpt-4.1')) return 'GPT-4.1';
-  return MODEL_PRESETS[0];
-}
-
-function buildCommandForModel(modelLabel) {
-  return MODEL_COMMAND_BY_LABEL[modelLabel] || MODEL_COMMAND_BY_LABEL[MODEL_PRESETS[0]];
-}
 
 function normalizeHeartbeatIntervalMs(value) {
   const ms = Number(value);
@@ -127,10 +108,6 @@ function normalizeRuntimeSettings(config = {}) {
 }
 
 function applyQuickSettings(config = {}) {
-  if (quickModelSelect) {
-    quickModelSelect.value = resolveModelFromCommand(config.aiCommand);
-  }
-
   if (quickHeartbeatEnabled) {
     quickHeartbeatEnabled.checked = config.heartbeatEnabled !== false;
   }
@@ -166,20 +143,112 @@ function normalizeAiCommand(value) {
   return normalized || 'codex';
 }
 
-async function createNewTab(autoCommand) {
-  let cwd = null;
-  let dirName = '终端';
+function createTabSnapshot() {
+  return {
+    version: 1,
+    activeIndex: tabs.findIndex((tab) => tab.id === activeTabId),
+    tabs: tabs.map((tab) => ({
+      title: tab.title,
+      manuallyRenamed: !!tab.manuallyRenamed,
+      cwd: tab.cwd || '',
+      autoCommand: tab.autoCommand || ''
+    }))
+  };
+}
 
-  // Only show directory picker for AI tabs
-  if (autoCommand) {
+function persistTabSnapshot() {
+  if (isRestoringTabs) return;
+  try {
+    window.localStorage.setItem(TAB_SNAPSHOT_KEY, JSON.stringify(createTabSnapshot()));
+  } catch (err) {
+    console.warn('Failed to persist tab snapshot:', err);
+  }
+}
+
+function loadTabSnapshot() {
+  try {
+    const raw = window.localStorage.getItem(TAB_SNAPSHOT_KEY);
+    if (!raw) return null;
+    const snapshot = JSON.parse(raw);
+    if (!snapshot || !Array.isArray(snapshot.tabs) || snapshot.tabs.length === 0) return null;
+    return snapshot;
+  } catch (err) {
+    console.warn('Failed to load tab snapshot:', err);
+    return null;
+  }
+}
+
+async function restoreTabsFromSnapshot() {
+  const snapshot = loadTabSnapshot();
+  if (!snapshot) return false;
+
+  isRestoringTabs = true;
+  let restoredCount = 0;
+
+  try {
+    for (const tab of snapshot.tabs) {
+      try {
+        const restoredId = await createNewTab({
+          title: tab.title || '终端',
+          manuallyRenamed: !!tab.manuallyRenamed,
+          cwd: tab.cwd || null,
+          autoCommand: tab.autoCommand || null,
+          skipDirectoryPrompt: true
+        });
+
+        if (restoredId) {
+          restoredCount += 1;
+        }
+      } catch (tabErr) {
+        console.warn('Failed to restore one tab from snapshot:', tabErr, tab);
+      }
+    }
+  } catch (err) {
+    console.warn('Failed while restoring tabs from snapshot:', err);
+  } finally {
+    isRestoringTabs = false;
+  }
+
+  if (restoredCount === 0) {
+    return false;
+  }
+
+  const activeIndex = Number(snapshot.activeIndex);
+  if (Number.isInteger(activeIndex) && activeIndex >= 0 && activeIndex < tabs.length) {
+    switchToTabById(tabs[activeIndex].id);
+  } else if (tabs.length > 0) {
+    switchToTabById(tabs[tabs.length - 1].id);
+  }
+
+  persistTabSnapshot();
+  return true;
+}
+
+async function createNewTab(options = {}) {
+  const resolvedOptions = typeof options === 'string' ? { autoCommand: options } : (options || {});
+  const skipDirectoryPrompt = !!resolvedOptions.skipDirectoryPrompt;
+  const autoCommand = resolvedOptions.autoCommand ? normalizeAiCommand(resolvedOptions.autoCommand) : null;
+  let cwd = resolvedOptions.cwd || null;
+  let dirName = resolvedOptions.title || '终端';
+
+  // Only show directory picker for AI tabs when not restoring.
+  if (autoCommand && !skipDirectoryPrompt) {
     const result = await window.api.selectDirectory();
-    if (result.canceled) return;
+    if (result.canceled) return null;
     cwd = result.path;
+    dirName = cwd.split('/').pop() || cwd;
+  } else if (autoCommand && cwd && !resolvedOptions.title) {
     dirName = cwd.split('/').pop() || cwd;
   }
 
   const tabId = generateTabId();
-  const tabData = { id: tabId, title: dirName, manuallyRenamed: false };
+  const tabData = {
+    id: tabId,
+    title: dirName,
+    manuallyRenamed: !!resolvedOptions.manuallyRenamed,
+    cwd,
+    autoCommand
+  };
   tabs.push(tabData);
 
   const tabEl = document.createElement('div');
@@ -234,13 +303,16 @@ async function createNewTab(autoCommand) {
   await window.api.createTerminal(tabId, cwd, autoCommand || null);
   window.api.resizeTerminal(tabId, cols, rows);
   terminalManager.focus(tabId);
+  persistTabSnapshot();
+  return tabId;
 }
 
 async function createNewAiTab() {
-  await createNewTab(aiCommand);
+  await createNewTab({ autoCommand: aiCommand });
 }
 
 function switchToTabById(tabId) {
+  if (!tabs.some((tab) => tab.id === tabId)) return;
   activeTabId = tabId;
   tabBar.querySelectorAll('.tab').forEach((el) => {
     el.classList.toggle('active', el.dataset.tabId === tabId);
@@ -251,6 +323,7 @@ function switchToTabById(tabId) {
   requestAnimationFrame(() => {
     terminalManager.focus(tabId);
   });
+  persistTabSnapshot();
 }
 
 function switchToTabByIndex(index) {
@@ -314,6 +387,7 @@ async function closeTab(tabId) {
     const newIndex = Math.min(index, tabs.length - 1);
     switchToTabById(tabs[newIndex].id);
   }
+  persistTabSnapshot();
 }
 
 // --- Tab Rename ---
@@ -344,6 +418,7 @@ function startRename(tabEl, tabData) {
       startRename(tabEl, tabData);
     });
     input.replaceWith(newSpan);
+    persistTabSnapshot();
   };
 
   input.addEventListener('blur', finishRename);
@@ -372,6 +447,7 @@ function updateTabTitle(tabId, title, analyzing) {
   const tabData = tabs.find((t) => t.id === tabId);
   if (tabData && !analyzing) {
     tabData.title = title;
+    persistTabSnapshot();
   }
   const tabEl = tabBar.querySelector(`.tab[data-tab-id="${tabId}"]`);
   if (tabEl) {
@@ -423,11 +499,6 @@ async function openSettings() {
   settingsAiCommand.value = config.aiCommand;
   settingsBaseUrl.value = config.baseUrl || '';
   settingsApiKey.value = config.apiKey || '';
-  settingsHeartbeatEnabled.checked = config.heartbeatEnabled !== false;
-  const intervalMinutes = Math.round((Number(config.heartbeatIntervalMs) || 3 * 60 * 1000) / 60000);
-  settingsHeartbeatInterval.value = HEARTBEAT_INTERVAL_OPTIONS.includes(String(intervalMinutes))
-    ? String(intervalMinutes)
-    : '3';
   settingsModal.classList.remove('hidden');
   settingsAiCommand.focus();
 }
@@ -437,16 +508,16 @@ function closeSettings() {
 }
 
 async function saveSettings() {
+  const current = normalizeRuntimeSettings(await window.api.getSettings());
   const nextConfig = normalizeRuntimeSettings({
+    ...current,
     apiKey: settingsApiKey.value.trim(),
     baseUrl: settingsBaseUrl.value.trim(),
-    aiCommand: settingsAiCommand.value,
-    heartbeatEnabled: !!settingsHeartbeatEnabled.checked,
-    heartbeatIntervalMs: (Number(settingsHeartbeatInterval.value) || 3) * 60 * 1000
+    aiCommand: settingsAiCommand.value
   });
   await persistRuntimeSettings(nextConfig);
   closeSettings();
-  showInAppNotice('设置已保存', '新建会话将使用最新模型与心跳配置。');
+  showInAppNotice('设置已保存', '新建会话将使用最新默认命令与连接配置。');
 }
 
 async function saveQuickHeartbeatSettings() {
@@ -461,22 +532,7 @@ async function saveQuickHeartbeatSettings() {
 }
 
 function initializeQuickSettings() {
-  if (!quickModelSelect || !quickHeartbeatEnabled || !quickHeartbeatInterval) return;
-
-  quickModelSelect.addEventListener('change', async () => {
-    try {
-      const selectedModel = quickModelSelect.value;
-      const current = normalizeRuntimeSettings(await window.api.getSettings());
-      await persistRuntimeSettings({
-        ...current,
-        aiCommand: buildCommandForModel(selectedModel)
-      });
-      showInAppNotice('模型已更新', `新会话默认模型：${selectedModel}`);
-    } catch (err) {
-      console.warn('Failed to update model preset:', err);
-      showInAppNotice('模型更新失败', '请稍后再试或在设置中手动修改。');
-    }
-  });
+  if (!quickHeartbeatEnabled || !quickHeartbeatInterval) return;
 
   quickHeartbeatEnabled.addEventListener('change', async () => {
     try {
@@ -552,6 +608,38 @@ async function showNonBlockingNotice(title, message) {
   showInAppNotice(title, message);
 }
 
+async function showHeartbeatArchiveDigestForActiveTab() {
+  if (!activeTabId) {
+    showInAppNotice('心跳归档', '当前没有可提取归档的活跃会话。');
+    return;
+  }
+
+  const tabData = tabs.find((t) => t.id === activeTabId);
+  const tabTitle = tabData && tabData.title ? tabData.title : '当前会话';
+
+  try {
+    const result = await window.api.summarizeHeartbeatArchive({
+      tabId: activeTabId,
+      days: 14,
+      limit: 30
+    });
+
+    if (!result || !Array.isArray(result.records) || result.records.length === 0) {
+      showInAppNotice('心跳归档', `会话“${tabTitle}”暂无可用归档记录。`);
+      return;
+    }
+
+    const summary = (result.summary || '已提取会话归档摘要').replace(/\s+/g, ' ').trim();
+    const analysis = (result.analysis || '').replace(/\s+/g, ' ').trim();
+    const stats = `提取 ${result.records.length}/${result.total} 条记录`;
+    const message = analysis ? `${summary}\n${analysis}\n${stats}` : `${summary}\n${stats}`;
+    showNonBlockingNotice(`归档总结 · ${tabTitle}`, message);
+  } catch (err) {
+    console.warn('Failed to summarize heartbeat archive:', err);
+    showInAppNotice('心跳归档提取失败', '请稍后重试。');
+  }
+}
+
 // --- IPC Listeners ---
 
 window.api.onTerminalOutput(({ tabId, data }) => {
@@ -584,7 +672,7 @@ window.api.onTerminalConfirmNeeded(({ tabId, prompt }) => {
   const compactPrompt = (prompt || '').replace(/\s+/g, ' ').trim();
   const message = compactPrompt
     ? `会话“${tabData.title}”需要确认：${compactPrompt}`
-    : `会话“${tabData.title}”需要确认，请切换到该会话输入 y/yes 等选项。`;
+    : `会话“${tabData.title}”检测到确认信息，请查看最新输出。`;
 
   showNonBlockingNotice('需要确认', message);
 });
@@ -614,6 +702,7 @@ console.log('Setting up shortcut listeners...');
 window.api.onNewTab(() => createNewAiTab());
 window.api.onCloseTab(() => { if (activeTabId) closeTab(activeTabId); });
 window.api.onRefreshTopics(() => refreshAllTopics());
+window.api.onShowHeartbeatArchive(() => showHeartbeatArchiveDigestForActiveTab());
 window.api.onSwitchTab(({ index }) => switchToTabByIndex(index));
 window.api.onIncreaseFont(() => {
   console.log('onIncreaseFont shortcut triggered');
@@ -680,5 +769,14 @@ setInterval(() => {
 // Initialize theme based on system preference
 initTheme();
 initializeQuickSettings();
+window.addEventListener('beforeunload', persistTabSnapshot);
 
-loadRuntimeSettings().finally(() => createNewAiTab());
+async function bootstrapApp() {
+  await loadRuntimeSettings();
+  const restored = await restoreTabsFromSnapshot();
+  if (!restored) {
+    await createNewAiTab();
+  }
+}
+
+bootstrapApp();
