@@ -691,7 +691,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       enableRemoteModule: false,
-      webSecurity: true
+      // Keep file:// local resource compatibility for packaged renderer assets.
+      webSecurity: false
     }
   });
 
@@ -769,13 +770,19 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
   if (cwdResolution.fallbackApplied) {
     console.warn(`[terminal] CWD fallback for tab ${tabId}: requested="${cwdResolution.requestedCwd}" resolved="${resolvedCwd}"`);
   }
-  const ptyProcess = pty.spawn(shell, ['-l'], {
-    name: 'xterm-256color',
-    cols: 80,
-    rows: 24,
-    cwd: resolvedCwd,
-    env: { ...process.env, TERM: 'xterm-256color' }
-  });
+  let ptyProcess;
+  try {
+    ptyProcess = pty.spawn(shell, ['-l'], {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: resolvedCwd,
+      env: { ...process.env, TERM: 'xterm-256color' }
+    });
+  } catch (err) {
+    const reason = err && err.message ? err.message : 'unknown error';
+    throw new Error(`Failed to spawn terminal shell (${shell}) in cwd (${resolvedCwd}): ${reason}`);
+  }
 
   const entry = {
     pty: ptyProcess,

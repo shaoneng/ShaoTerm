@@ -471,7 +471,10 @@ async function createNewTab(options = {}) {
     } else {
       syncScrollBottomButton();
     }
-    showInAppNotice('会话创建失败', '无法创建终端会话，请检查 shell 环境后重试。');
+    const detail = err && err.message
+      ? String(err.message).replace(/\s+/g, ' ').trim().slice(0, 220)
+      : '未知错误';
+    showInAppNotice('会话创建失败', `无法创建终端会话：${detail}`);
     return null;
   }
   if (createResult && createResult.resolvedCwd) {
