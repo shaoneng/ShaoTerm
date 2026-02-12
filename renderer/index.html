@@ -12,33 +12,42 @@
   <!-- Toolbar -->
   <div id="toolbar">
     <div id="toolbar-spacer"></div>
-    <button id="btn-settings" title="API 设置">设置</button>
   </div>
 
-  <!-- Tab Bar -->
-  <div id="tab-bar">
-    <button id="btn-add-terminal" title="新建终端">+</button>
-    <button id="btn-add-ai" title="新建 AI 会话">AI+</button>
+  <!-- Tab Row -->
+  <div id="tab-row">
+    <div id="tab-bar">
+      <button id="btn-add-terminal" title="新建终端">+</button>
+      <button id="btn-add-ai" title="新建 AI 会话">AI+</button>
+    </div>
+    <div id="tab-quick-settings">
+      <label class="tab-quick-group" for="quick-model-select">
+        <span class="tab-quick-label">模型</span>
+        <select id="quick-model-select" class="tab-quick-select" title="默认模型">
+          <option value="GPT-5.3-Codex">GPT-5.3-Codex</option>
+          <option value="GPT-5-Codex">GPT-5-Codex</option>
+          <option value="GPT-4.1">GPT-4.1</option>
+        </select>
+      </label>
+      <div class="tab-quick-group tab-quick-group-heartbeat">
+        <span class="tab-quick-label">心跳</span>
+        <label class="tab-heartbeat-switch" title="启用心跳">
+          <input type="checkbox" id="quick-heartbeat-enabled" checked>
+          <span>开</span>
+        </label>
+        <select id="quick-heartbeat-interval" class="tab-quick-select" title="心跳间隔">
+          <option value="1">1 分钟</option>
+          <option value="3">3 分钟</option>
+          <option value="5">5 分钟</option>
+          <option value="10">10 分钟</option>
+        </select>
+      </div>
+      <button id="btn-settings" class="tab-quick-btn" title="设置">设置</button>
+    </div>
   </div>
 
   <!-- Terminal Container -->
   <div id="terminal-container"></div>
-
-  <!-- Follow-up Composer -->
-  <div id="composer-shell">
-    <textarea id="composer-input" rows="1" placeholder="Ask for follow-up changes"></textarea>
-    <div id="composer-controls">
-      <button id="composer-attach" class="composer-icon-btn" title="更多操作">+</button>
-      <button id="composer-model" class="composer-chip" title="模型">
-        <span class="composer-chip-label">GPT-5.3-Codex</span>
-        <span class="composer-chip-caret">v</span>
-      </button>
-      <button id="composer-effort" class="composer-chip" title="推理强度">
-        <span class="composer-chip-label">Extra High</span>
-        <span class="composer-chip-caret">v</span>
-      </button>
-    </div>
-  </div>
 
   <!-- Scroll to Bottom Button -->
   <button id="btn-scroll-bottom" class="scroll-bottom-btn" title="滚动到底部">↓</button>
@@ -46,13 +55,26 @@
   <!-- Settings Modal -->
   <div id="settings-modal" class="modal hidden">
     <div class="modal-content">
-      <h3>API 设置</h3>
+      <h3>设置</h3>
       <label class="modal-label">默认 AI 命令</label>
       <input type="text" id="settings-ai-command" placeholder="codex">
       <label class="modal-label">Base URL</label>
       <input type="text" id="settings-base-url" placeholder="https://api.anthropic.com">
       <label class="modal-label">API Key</label>
       <input type="password" id="settings-api-key" placeholder="sk-...">
+      <h4 class="modal-section-title">心跳设置</h4>
+      <label class="modal-check">
+        <input type="checkbox" id="settings-heartbeat-enabled" checked>
+        <span>启用会话心跳总结</span>
+      </label>
+      <label class="modal-label">心跳间隔</label>
+      <select id="settings-heartbeat-interval">
+        <option value="1">1 分钟</option>
+        <option value="3">3 分钟</option>
+        <option value="5">5 分钟</option>
+        <option value="10">10 分钟</option>
+      </select>
+      <div class="modal-help">心跳总结将后台自动执行，无需手动按回车输入。</div>
       <div class="modal-buttons">
         <button id="btn-settings-save">保存</button>
         <button id="btn-settings-cancel" class="btn-secondary">取消</button>

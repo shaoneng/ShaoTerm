@@ -8,13 +8,16 @@ let win;
 const terminals = new Map();
 const confirmAlertAt = new Map();
 const CONFIRM_ALERT_COOLDOWN_MS = 10000;
-const HEARTBEAT_INTERVAL_MS = 3 * 60 * 1000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 3 * 60 * 1000;
+const MIN_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+const MAX_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
 const HEARTBEAT_MIN_CHARS = 120;
 const HEARTBEAT_CONTEXT_TAIL_CHARS = 2600;
 const HEARTBEAT_IDLE_GAP_MS = 12000;
-const HEARTBEAT_SESSION_TIMEOUT_MS = 25000;
-const HEARTBEAT_SUMMARY_TAG = 'HEARTBEAT_SUMMARY';
-const HEARTBEAT_ANALYSIS_TAG = 'HEARTBEAT_ANALYSIS';
+const heartbeatRuntime = {
+  enabled: true,
+  intervalMs: DEFAULT_HEARTBEAT_INTERVAL_MS
+};
 
 function toUnpackedPath(filePath) {
   return filePath
@@ -123,52 +126,20 @@ function createHeartbeatSignature(rawBuffer) {
     .slice(-HEARTBEAT_CONTEXT_TAIL_CHARS);
 }
 
-function parseSessionHeartbeat(rawText) {
-  const text = (rawText || '').replace(/\r/g, '\n');
-  const summaryMatch = text.match(new RegExp(`${HEARTBEAT_SUMMARY_TAG}\\s*[:：]\\s*(.+)`, 'i'));
-  const analysisMatch = text.match(new RegExp(`${HEARTBEAT_ANALYSIS_TAG}\\s*[:：]\\s*(.+)`, 'i'));
-  if (!summaryMatch || !analysisMatch) return null;
-
-  const summary = String(summaryMatch[1] || '').trim().slice(0, 120);
-  const analysis = String(analysisMatch[1] || '').trim().slice(0, 200);
-  if (!summary || !analysis) return null;
-  return { summary, analysis };
+function normalizeHeartbeatIntervalMs(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return DEFAULT_HEARTBEAT_INTERVAL_MS;
+  return Math.min(MAX_HEARTBEAT_INTERVAL_MS, Math.max(MIN_HEARTBEAT_INTERVAL_MS, Math.round(n)));
 }
 
-function resolveHeartbeatCollector(entry, report) {
-  if (!entry || !entry.heartbeatCollector) return;
-  const collector = entry.heartbeatCollector;
-  clearTimeout(collector.timeoutId);
-  entry.heartbeatCollector = null;
-  collector.resolve(report || null);
-}
-
-async function requestHeartbeatFromSession(entry) {
-  if (!entry || !entry.isAiSession || !entry.alive) return null;
-
-  const prompt = [
-    '请基于当前会话上下文做一次心跳总结，只输出两行：',
-    `1) ${HEARTBEAT_SUMMARY_TAG}: <不超过30字的一句话总结>`,
-    `2) ${HEARTBEAT_ANALYSIS_TAG}: <不超过60字的下一步建议>`,
-    '不要输出其他内容。'
-  ].join(' ');
-
-  return new Promise((resolve) => {
-    const timeoutId = setTimeout(() => {
-      resolveHeartbeatCollector(entry, null);
-    }, HEARTBEAT_SESSION_TIMEOUT_MS);
-
-    entry.heartbeatCollector = {
-      raw: '',
-      resolve,
-      timeoutId
-    };
-    entry.pty.write(`${prompt}\r`);
-  });
+function applyHeartbeatConfig(config = {}) {
+  heartbeatRuntime.enabled = config.heartbeatEnabled !== false;
+  heartbeatRuntime.intervalMs = normalizeHeartbeatIntervalMs(config.heartbeatIntervalMs);
 }
 
 async function runHeartbeat(tabId, entry) {
   if (!entry || !entry.alive || entry.heartbeatInFlight) return;
+  if (!heartbeatRuntime.enabled) return;
   if (entry.activitySeq <= entry.lastHeartbeatActivitySeq) return;
 
   const now = Date.now();
@@ -181,19 +152,7 @@ async function runHeartbeat(tabId, entry) {
   entry.heartbeatInFlight = true;
   try {
     const activityMark = entry.activitySeq;
-    let report = null;
-    let source = 'fallback';
-
-    if (entry.isAiSession) {
-      report = await requestHeartbeatFromSession(entry);
-      if (report) {
-        source = 'session-ai';
-      }
-    }
-
-    if (!report) {
-      report = await topicDetector.analyzeHeartbeat(signature);
-    }
+    const report = await topicDetector.analyzeHeartbeat(signature);
 
     entry.lastHeartbeatSignature = signature;
     entry.lastHeartbeatActivitySeq = activityMark;
@@ -203,14 +162,13 @@ async function runHeartbeat(tabId, entry) {
         tabId,
         summary: report.summary || '会话进行中',
         analysis: report.analysis || '请继续查看最新输出。',
-        source,
+        source: 'background',
         at: new Date().toISOString()
       });
     }
   } catch (err) {
     console.warn(`[heartbeat] Failed for tab ${tabId}:`, err.message);
   } finally {
-    resolveHeartbeatCollector(entry, null);
     entry.heartbeatInFlight = false;
   }
 }
@@ -221,17 +179,23 @@ function stopHeartbeat(entry) {
     clearInterval(entry.heartbeatTimer);
     entry.heartbeatTimer = null;
   }
-  resolveHeartbeatCollector(entry, null);
   entry.heartbeatInFlight = false;
 }
 
 function startHeartbeat(tabId, entry) {
   stopHeartbeat(entry);
+  if (!heartbeatRuntime.enabled) return;
   entry.heartbeatTimer = setInterval(() => {
     runHeartbeat(tabId, entry).catch((err) => {
       console.warn(`[heartbeat] Unexpected error for tab ${tabId}:`, err.message);
     });
-  }, HEARTBEAT_INTERVAL_MS);
+  }, heartbeatRuntime.intervalMs);
+}
+
+function restartAllHeartbeatTimers() {
+  for (const [tabId, entry] of terminals.entries()) {
+    startHeartbeat(tabId, entry);
+  }
 }
 
 function createWindow() {
@@ -339,7 +303,6 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     lastUserInputAt: 0,
     heartbeatInFlight: false,
     heartbeatTimer: null,
-    heartbeatCollector: null,
     lastHeartbeatSignature: ''
   };
   terminals.set(tabId, entry);
@@ -356,16 +319,7 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     }
 
     const plain = stripAnsiForDetection(data);
-    if (entry.heartbeatInFlight && entry.heartbeatCollector) {
-      entry.heartbeatCollector.raw += plain;
-      if (entry.heartbeatCollector.raw.length > 6000) {
-        entry.heartbeatCollector.raw = entry.heartbeatCollector.raw.slice(-6000);
-      }
-      const parsed = parseSessionHeartbeat(entry.heartbeatCollector.raw);
-      if (parsed) {
-        resolveHeartbeatCollector(entry, parsed);
-      }
-    } else if (plain.trim()) {
+    if (plain.trim()) {
       entry.activitySeq += 1;
       entry.lastOutputAt = Date.now();
     }
@@ -475,11 +429,14 @@ ipcMain.handle('topic:refresh', async () => {
 // --- IPC: Settings ---
 
 ipcMain.handle('settings:get', () => {
+  applyHeartbeatConfig(topicDetector.getConfig());
   return topicDetector.getConfig();
 });
 
-ipcMain.handle('settings:save', (event, { apiKey, baseUrl, aiCommand }) => {
-  topicDetector.configure(apiKey, baseUrl, aiCommand);
+ipcMain.handle('settings:save', (event, { apiKey, baseUrl, aiCommand, heartbeat }) => {
+  topicDetector.configure(apiKey, baseUrl, aiCommand, heartbeat || {});
+  applyHeartbeatConfig(topicDetector.getConfig());
+  restartAllHeartbeatTimers();
   return { success: true };
 });
 
@@ -590,6 +547,7 @@ function buildMenu() {
 
 app.whenReady().then(() => {
   ensureNodePtySpawnHelperExecutable();
+  applyHeartbeatConfig(topicDetector.getConfig());
   createWindow();
 });
 

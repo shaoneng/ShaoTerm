@@ -80,17 +80,80 @@ const settingsModal = document.getElementById('settings-modal');
 const settingsAiCommand = document.getElementById('settings-ai-command');
 const settingsBaseUrl = document.getElementById('settings-base-url');
 const settingsApiKey = document.getElementById('settings-api-key');
+const settingsHeartbeatEnabled = document.getElementById('settings-heartbeat-enabled');
+const settingsHeartbeatInterval = document.getElementById('settings-heartbeat-interval');
 const btnSettingsSave = document.getElementById('btn-settings-save');
 const btnSettingsCancel = document.getElementById('btn-settings-cancel');
-const composerInput = document.getElementById('composer-input');
-const composerAttach = document.getElementById('composer-attach');
-const composerModel = document.getElementById('composer-model');
-const composerEffort = document.getElementById('composer-effort');
+const quickModelSelect = document.getElementById('quick-model-select');
+const quickHeartbeatEnabled = document.getElementById('quick-heartbeat-enabled');
+const quickHeartbeatInterval = document.getElementById('quick-heartbeat-interval');
 let aiCommand = 'codex';
-const composerModels = ['GPT-5.3-Codex', 'GPT-5-Codex', 'GPT-4.1'];
-const composerEfforts = ['Extra High', 'High', 'Medium'];
-let composerModelIndex = 0;
-let composerEffortIndex = 0;
+const MODEL_PRESETS = ['GPT-5.3-Codex', 'GPT-5-Codex', 'GPT-4.1'];
+const MODEL_COMMAND_BY_LABEL = {
+  'GPT-5.3-Codex': 'codex -m gpt-5.3-codex',
+  'GPT-5-Codex': 'codex -m gpt-5-codex',
+  'GPT-4.1': 'codex -m gpt-4.1'
+};
+const HEARTBEAT_INTERVAL_OPTIONS = ['1', '3', '5', '10'];
+
+function resolveModelFromCommand(command) {
+  const normalized = String(command || '').toLowerCase();
+  if (normalized.includes('gpt-5.3-codex')) return 'GPT-5.3-Codex';
+  if (normalized.includes('gpt-5-codex')) return 'GPT-5-Codex';
+  if (normalized.includes('gpt-4.1')) return 'GPT-4.1';
+  return MODEL_PRESETS[0];
+}
+
+function buildCommandForModel(modelLabel) {
+  return MODEL_COMMAND_BY_LABEL[modelLabel] || MODEL_COMMAND_BY_LABEL[MODEL_PRESETS[0]];
+}
+
+function normalizeHeartbeatIntervalMs(value) {
+  const ms = Number(value);
+  const roundedMinutes = Math.round((Number.isFinite(ms) ? ms : 3 * 60 * 1000) / 60000);
+  const normalizedMinutes = HEARTBEAT_INTERVAL_OPTIONS.includes(String(roundedMinutes)) ? roundedMinutes : 3;
+  return normalizedMinutes * 60 * 1000;
+}
+
+function normalizeRuntimeSettings(config = {}) {
+  return {
+    apiKey: config.apiKey || '',
+    baseUrl: config.baseUrl || '',
+    aiCommand: normalizeAiCommand(config.aiCommand),
+    heartbeatEnabled: config.heartbeatEnabled !== false,
+    heartbeatIntervalMs: normalizeHeartbeatIntervalMs(config.heartbeatIntervalMs),
+    heartbeatPreferSessionAi: false
+  };
+}
+
+function applyQuickSettings(config = {}) {
+  if (quickModelSelect) {
+    quickModelSelect.value = resolveModelFromCommand(config.aiCommand);
+  }
+
+  if (quickHeartbeatEnabled) {
+    quickHeartbeatEnabled.checked = config.heartbeatEnabled !== false;
+  }
+
+  if (quickHeartbeatInterval) {
+    const minutes = Math.round((Number(config.heartbeatIntervalMs) || 3 * 60 * 1000) / 60000);
+    quickHeartbeatInterval.value = HEARTBEAT_INTERVAL_OPTIONS.includes(String(minutes))
+      ? String(minutes)
+      : '3';
+  }
+}
+
+async function persistRuntimeSettings(config) {
+  const normalized = normalizeRuntimeSettings(config);
+  aiCommand = normalized.aiCommand;
+  await window.api.saveSettings(normalized.apiKey, normalized.baseUrl, normalized.aiCommand, {
+    heartbeatEnabled: normalized.heartbeatEnabled,
+    heartbeatIntervalMs: normalized.heartbeatIntervalMs,
+    heartbeatPreferSessionAi: normalized.heartbeatPreferSessionAi
+  });
+  applyQuickSettings(normalized);
+  return normalized;
+}
 
 // --- Tab Management ---
 
@@ -335,21 +398,36 @@ function initTheme() {
 
 async function loadRuntimeSettings() {
   try {
-    const config = await window.api.getSettings();
-    aiCommand = normalizeAiCommand(config.aiCommand);
+    const config = normalizeRuntimeSettings(await window.api.getSettings());
+    aiCommand = config.aiCommand;
+    applyQuickSettings(config);
     return config;
   } catch (err) {
     console.warn('Failed to load runtime settings:', err);
-    aiCommand = 'codex';
-    return { apiKey: '', baseUrl: '', aiCommand };
+    const fallback = normalizeRuntimeSettings({
+      apiKey: '',
+      baseUrl: '',
+      aiCommand: 'codex -m gpt-5.3-codex',
+      heartbeatEnabled: true,
+      heartbeatIntervalMs: 3 * 60 * 1000,
+      heartbeatPreferSessionAi: false
+    });
+    aiCommand = fallback.aiCommand;
+    applyQuickSettings(fallback);
+    return fallback;
   }
 }
 
 async function openSettings() {
   const config = await loadRuntimeSettings();
-  settingsAiCommand.value = normalizeAiCommand(config.aiCommand);
+  settingsAiCommand.value = config.aiCommand;
   settingsBaseUrl.value = config.baseUrl || '';
   settingsApiKey.value = config.apiKey || '';
+  settingsHeartbeatEnabled.checked = config.heartbeatEnabled !== false;
+  const intervalMinutes = Math.round((Number(config.heartbeatIntervalMs) || 3 * 60 * 1000) / 60000);
+  settingsHeartbeatInterval.value = HEARTBEAT_INTERVAL_OPTIONS.includes(String(intervalMinutes))
+    ? String(intervalMinutes)
+    : '3';
   settingsModal.classList.remove('hidden');
   settingsAiCommand.focus();
 }
@@ -359,72 +437,65 @@ function closeSettings() {
 }
 
 async function saveSettings() {
-  const command = normalizeAiCommand(settingsAiCommand.value);
-  const baseUrl = settingsBaseUrl.value.trim();
-  const apiKey = settingsApiKey.value.trim();
-  aiCommand = command;
-  await window.api.saveSettings(apiKey, baseUrl, command);
-  closeSettings();
-}
-
-function setComposerChipText(chipButton, text) {
-  if (!chipButton) return;
-  const label = chipButton.querySelector('.composer-chip-label');
-  if (label) label.textContent = text;
-}
-
-function autoSizeComposerInput() {
-  if (!composerInput) return;
-  composerInput.style.height = '0px';
-  const nextHeight = Math.min(Math.max(composerInput.scrollHeight, 52), 132);
-  composerInput.style.height = `${nextHeight}px`;
-}
-
-function submitComposerInput() {
-  const value = (composerInput && composerInput.value ? composerInput.value : '').trim();
-  if (!value) return;
-
-  if (!activeTabId) {
-    showInAppNotice('没有可用会话', '请先创建一个终端会话。');
-    return;
-  }
-
-  window.api.sendTerminalData(activeTabId, `${value}\r`);
-  if (composerInput) composerInput.value = '';
-  autoSizeComposerInput();
-  terminalManager.focus(activeTabId);
-}
-
-function initializeComposer() {
-  if (!composerInput || !composerAttach || !composerModel || !composerEffort) return;
-
-  setComposerChipText(composerModel, composerModels[composerModelIndex]);
-  setComposerChipText(composerEffort, composerEfforts[composerEffortIndex]);
-  autoSizeComposerInput();
-
-  composerInput.addEventListener('input', () => {
-    autoSizeComposerInput();
+  const nextConfig = normalizeRuntimeSettings({
+    apiKey: settingsApiKey.value.trim(),
+    baseUrl: settingsBaseUrl.value.trim(),
+    aiCommand: settingsAiCommand.value,
+    heartbeatEnabled: !!settingsHeartbeatEnabled.checked,
+    heartbeatIntervalMs: (Number(settingsHeartbeatInterval.value) || 3) * 60 * 1000
   });
+  await persistRuntimeSettings(nextConfig);
+  closeSettings();
+  showInAppNotice('设置已保存', '新建会话将使用最新模型与心跳配置。');
+}
 
-  composerInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      submitComposerInput();
+async function saveQuickHeartbeatSettings() {
+  const nextHeartbeatEnabled = !!quickHeartbeatEnabled.checked;
+  const nextHeartbeatIntervalMs = (Number(quickHeartbeatInterval.value) || 3) * 60 * 1000;
+  const current = normalizeRuntimeSettings(await window.api.getSettings());
+  await persistRuntimeSettings({
+    ...current,
+    heartbeatEnabled: nextHeartbeatEnabled,
+    heartbeatIntervalMs: nextHeartbeatIntervalMs
+  });
+}
+
+function initializeQuickSettings() {
+  if (!quickModelSelect || !quickHeartbeatEnabled || !quickHeartbeatInterval) return;
+
+  quickModelSelect.addEventListener('change', async () => {
+    try {
+      const selectedModel = quickModelSelect.value;
+      const current = normalizeRuntimeSettings(await window.api.getSettings());
+      await persistRuntimeSettings({
+        ...current,
+        aiCommand: buildCommandForModel(selectedModel)
+      });
+      showInAppNotice('模型已更新', `新会话默认模型：${selectedModel}`);
+    } catch (err) {
+      console.warn('Failed to update model preset:', err);
+      showInAppNotice('模型更新失败', '请稍后再试或在设置中手动修改。');
     }
   });
 
-  composerAttach.addEventListener('click', () => {
-    showInAppNotice('更多功能', '附件与上下文选择功能将在后续版本提供。');
+  quickHeartbeatEnabled.addEventListener('change', async () => {
+    try {
+      await saveQuickHeartbeatSettings();
+      showInAppNotice('心跳已更新', `会话心跳${quickHeartbeatEnabled.checked ? '已启用' : '已关闭'}。`);
+    } catch (err) {
+      console.warn('Failed to update heartbeat enabled flag:', err);
+      showInAppNotice('心跳更新失败', '请稍后再试或在设置中手动修改。');
+    }
   });
 
-  composerModel.addEventListener('click', () => {
-    composerModelIndex = (composerModelIndex + 1) % composerModels.length;
-    setComposerChipText(composerModel, composerModels[composerModelIndex]);
-  });
-
-  composerEffort.addEventListener('click', () => {
-    composerEffortIndex = (composerEffortIndex + 1) % composerEfforts.length;
-    setComposerChipText(composerEffort, composerEfforts[composerEffortIndex]);
+  quickHeartbeatInterval.addEventListener('change', async () => {
+    try {
+      await saveQuickHeartbeatSettings();
+      showInAppNotice('心跳已更新', `心跳间隔已调整为 ${quickHeartbeatInterval.value} 分钟。`);
+    } catch (err) {
+      console.warn('Failed to update heartbeat interval:', err);
+      showInAppNotice('心跳更新失败', '请稍后再试或在设置中手动修改。');
+    }
   });
 }
 
@@ -608,6 +679,6 @@ setInterval(() => {
 
 // Initialize theme based on system preference
 initTheme();
-initializeComposer();
+initializeQuickSettings();
 
 loadRuntimeSettings().finally(() => createNewAiTab());

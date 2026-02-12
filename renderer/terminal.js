@@ -1,49 +1,49 @@
 /* global Terminal, FitAddon */
 
 const DARK_THEME = {
-  background: '#1e1e1e',
-  foreground: '#cccccc',
-  cursor: '#ffffff',
-  selectionBackground: '#264f78',
-  black: '#000000',
-  red: '#cd3131',
-  green: '#0dbc79',
-  yellow: '#e5e510',
-  blue: '#2472c8',
-  magenta: '#bc3fbc',
-  cyan: '#11a8cd',
-  white: '#e5e5e5',
-  brightBlack: '#666666',
-  brightRed: '#f14c4c',
-  brightGreen: '#23d18b',
-  brightYellow: '#f5f543',
-  brightBlue: '#3b8eea',
-  brightMagenta: '#d670d6',
-  brightCyan: '#29b8db',
-  brightWhite: '#e5e5e5'
+  background: '#23262c',
+  foreground: '#d7dce4',
+  cursor: '#f4f7ff',
+  selectionBackground: '#47556e',
+  black: '#1f2430',
+  red: '#d36f80',
+  green: '#79c08f',
+  yellow: '#d7bd79',
+  blue: '#75a9ff',
+  magenta: '#b493e2',
+  cyan: '#72bfd4',
+  white: '#d5dae4',
+  brightBlack: '#7f8795',
+  brightRed: '#e68a9a',
+  brightGreen: '#95d7a7',
+  brightYellow: '#e8d39a',
+  brightBlue: '#96bdff',
+  brightMagenta: '#c6aaeb',
+  brightCyan: '#93d0df',
+  brightWhite: '#eef2fa'
 };
 
 const LIGHT_THEME = {
-  background: '#ffffff',
-  foreground: '#333333',
-  cursor: '#333333',
-  selectionBackground: '#add6ff',
-  black: '#000000',
-  red: '#cd3131',
-  green: '#008000',
-  yellow: '#795e26',
-  blue: '#0451a5',
-  magenta: '#bc05bc',
-  cyan: '#0598bc',
-  white: '#e5e5e5',
-  brightBlack: '#666666',
-  brightRed: '#cd3131',
-  brightGreen: '#14ce14',
-  brightYellow: '#b5ba00',
-  brightBlue: '#0451a5',
-  brightMagenta: '#bc05bc',
-  brightCyan: '#0598bc',
-  brightWhite: '#a5a5a5'
+  background: '#f5f7fb',
+  foreground: '#303644',
+  cursor: '#1e2430',
+  selectionBackground: '#cfdaf2',
+  black: '#2a2f3b',
+  red: '#b85d70',
+  green: '#3f8f59',
+  yellow: '#8d6b2b',
+  blue: '#2f6fc7',
+  magenta: '#8a5ec2',
+  cyan: '#2e869f',
+  white: '#dce1ea',
+  brightBlack: '#7f8796',
+  brightRed: '#c96f82',
+  brightGreen: '#56a56f',
+  brightYellow: '#a7833e',
+  brightBlue: '#4b84d8',
+  brightMagenta: '#9e74cf',
+  brightCyan: '#4697af',
+  brightWhite: '#eff3fa'
 };
 
 class TerminalManager {
@@ -56,27 +56,33 @@ class TerminalManager {
   create(tabId, containerElement) {
     console.log(`Creating terminal for tab ${tabId}`);
 
+    const surface = document.createElement('div');
+    surface.className = 'terminal-surface';
+    containerElement.appendChild(surface);
+
     const terminal = new Terminal({
       cursorBlink: true,
       fontSize: this.fontSize,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontFamily: '"SF Mono", Menlo, Monaco, "Courier New", monospace',
+      lineHeight: 1.24,
+      drawBoldTextInBrightColors: false,
       theme: this.isLight ? LIGHT_THEME : DARK_THEME
     });
 
     const fitAddon = new FitAddon.FitAddon();
     terminal.loadAddon(fitAddon);
-    terminal.open(containerElement);
+    terminal.open(surface);
     // Don't fit here — container may be hidden (display:none).
     // ResizeObserver below handles fitting when it becomes visible.
 
     // Auto-fit whenever the container's size changes (including becoming visible)
     const observer = new ResizeObserver(() => {
-      if (containerElement.offsetWidth > 0 && containerElement.offsetHeight > 0) {
+      if (surface.offsetWidth > 0 && surface.offsetHeight > 0) {
         fitAddon.fit();
         window.api.resizeTerminal(tabId, terminal.cols, terminal.rows);
       }
     });
-    observer.observe(containerElement);
+    observer.observe(surface);
 
     terminal.onData((data) => {
       window.api.sendTerminalData(tabId, data);

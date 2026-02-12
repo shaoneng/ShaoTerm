@@ -31,7 +31,7 @@
   --space-md: 16px;
   --space-lg: 24px;
   --space-xl: 32px;
-  --composer-reserved: 116px;
+  --composer-reserved: 18px;
 
   /* Border Radius */
   --radius-sm: 4px;
@@ -129,18 +129,27 @@ body {
   transform: scale(0.98);
 }
 
-/* Tab Bar - macOS Style */
-#tab-bar {
+/* Tab Row + Tab Bar - macOS Style */
+#tab-row {
   height: 40px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--separator);
   display: flex;
   align-items: center;
+  gap: var(--space-sm);
   padding: 0 var(--space-sm);
+  flex-shrink: 0;
+}
+
+#tab-bar {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
   gap: var(--space-xs);
   overflow-x: auto;
   overflow-y: hidden;
-  flex-shrink: 0;
 }
 
 #tab-bar::-webkit-scrollbar {
@@ -234,24 +243,126 @@ body {
   color: var(--text-primary);
 }
 
+#tab-quick-settings {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-shrink: 0;
+}
+
+.tab-quick-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 16px;
+  border: 0.5px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 64%, var(--bg-secondary));
+}
+
+.tab-quick-group-heartbeat {
+  gap: var(--space-xs);
+}
+
+.tab-quick-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.tab-quick-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  padding-right: 14px;
+  cursor: pointer;
+}
+
+.tab-heartbeat-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tab-heartbeat-switch input {
+  width: 13px;
+  height: 13px;
+}
+
+.tab-quick-btn {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 16px;
+  border: 0.5px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tab-quick-btn:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
 /* Terminal Container */
 #terminal-container {
   flex: 1;
   min-height: 0;
   position: relative;
   overflow: hidden;
-  background: var(--bg-primary);
+  background: color-mix(in srgb, var(--bg-secondary) 64%, var(--bg-primary));
 }
 
 .terminal-wrapper {
   width: 100%;
   height: 100%;
   display: none;
-  padding: var(--space-md);
+  padding: 0;
 }
 
 .terminal-wrapper.active {
   display: block;
+}
+
+.terminal-surface {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  border: none;
+  overflow: hidden;
+  background: transparent;
+  box-shadow: none;
+}
+
+.terminal-surface .xterm,
+.terminal-surface .xterm-viewport {
+  background: transparent !important;
+}
+
+.terminal-surface .xterm-viewport::-webkit-scrollbar {
+  width: 9px;
+}
+
+.terminal-surface .xterm-viewport::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-secondary) 38%, transparent);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.terminal-surface .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* Tab Rename Input */
@@ -311,7 +422,8 @@ body {
   margin-bottom: var(--space-xs);
 }
 
-.modal-content input {
+.modal-content input,
+.modal-content select {
   width: 100%;
   padding: var(--space-sm) var(--space-md);
   background: var(--bg-primary);
@@ -324,8 +436,48 @@ body {
   transition: border-color 0.15s ease;
 }
 
-.modal-content input:focus {
+.modal-content input:focus,
+.modal-content select:focus {
   border-color: var(--accent);
+}
+
+.modal-content select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%), linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% - 2px), calc(100% - 12px) calc(50% - 2px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+
+.modal-section-title {
+  margin-top: var(--space-sm);
+  margin-bottom: var(--space-sm);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modal-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.modal-check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.modal-help {
+  margin-top: -6px;
+  margin-bottom: var(--space-sm);
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 .modal-buttons {
@@ -382,6 +534,29 @@ body {
   flex-shrink: 0;
 }
 
+#composer-topbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.composer-settings-btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 14px;
+  border: 0.5px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.composer-settings-btn:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
 #composer-input {
   width: 100%;
   min-height: 52px;
@@ -426,37 +601,47 @@ body {
   color: var(--text-primary);
 }
 
-.composer-chip {
-  height: 34px;
-  border: none;
-  border-radius: 18px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
+.composer-select-wrap {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
+  height: 34px;
+  border-radius: 18px;
+  background: transparent;
+  border: 0.5px solid transparent;
   transition: all 0.15s ease;
 }
 
-.composer-chip:hover {
+.composer-select-wrap:hover {
   background: var(--hover);
-  color: var(--text-primary);
+  border-color: var(--border);
 }
 
-.composer-chip-label {
+.composer-select {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 0 28px 0 10px;
   font-size: 14px;
-  letter-spacing: 0.01em;
+  cursor: pointer;
+  outline: none;
 }
 
-.composer-chip-caret {
+.composer-select-wrap::after {
+  content: 'v';
+  position: absolute;
+  right: 10px;
   font-size: 12px;
-  margin-top: -1px;
+  color: var(--text-tertiary);
+  pointer-events: none;
 }
 
 .composer-icon-btn:focus-visible,
-.composer-chip:focus-visible,
+.composer-settings-btn:focus-visible,
+.composer-select:focus-visible,
 #composer-input:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
   outline-offset: 1px;
@@ -569,21 +754,10 @@ body {
 
 @media (max-width: 900px) {
   :root {
-    --composer-reserved: 104px;
+    --composer-reserved: 14px;
   }
 
-  #composer-shell {
-    width: calc(100% - 2 * var(--space-sm));
-    margin-bottom: var(--space-sm);
-    border-radius: 18px;
-  }
-
-  #composer-input {
-    min-height: 46px;
-    font-size: 14px;
-  }
-
-  .composer-chip-label {
-    font-size: 13px;
+  .tab-quick-label {
+    display: none;
   }
 }
