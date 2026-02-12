@@ -83,7 +83,40 @@ if (DEBUG_MODE) {
 
 // --- App State ---
 
-const terminalManager = new TerminalManager();
+function createFallbackTerminalManager() {
+  return {
+    __isFallback: true,
+    create() {
+      throw new Error('终端渲染内核未加载');
+    },
+    write() {},
+    fit() { return null; },
+    focus() {},
+    getScrollDistance() { return 0; },
+    onScrollStateChange() { return () => {}; },
+    isNearBottom() { return true; },
+    ensureInputVisible() {},
+    scrollToBottom() {},
+    destroy() {},
+    setLightMode() {},
+    increaseFontSize() {},
+    decreaseFontSize() {},
+    resetFontSize() {}
+  };
+}
+
+const terminalManager = (() => {
+  if (typeof TerminalManager === 'function') {
+    try {
+      return new TerminalManager();
+    } catch (err) {
+      console.warn('Failed to initialize TerminalManager, fallback to stub manager:', err);
+      return createFallbackTerminalManager();
+    }
+  }
+  console.warn('TerminalManager global is missing, fallback to stub manager.');
+  return createFallbackTerminalManager();
+})();
 const tabs = []; // { id, title, manuallyRenamed, cwd, autoCommand, heartbeatStatus, heartbeatSummary, heartbeatAnalysis, heartbeatAt }
 let activeTabId = null;
 let inAppNoticeContainer = null;
@@ -105,6 +138,14 @@ const btnSettingsSave = document.getElementById('btn-settings-save');
 const btnSettingsCancel = document.getElementById('btn-settings-cancel');
 const quickHeartbeatEnabled = document.getElementById('quick-heartbeat-enabled');
 const quickHeartbeatInterval = document.getElementById('quick-heartbeat-interval');
+const UI_REQUIRED_ELEMENTS = [
+  ['tab-bar', tabBar],
+  ['terminal-container', terminalContainer],
+  ['btn-add-terminal', btnAddTerminal],
+  ['btn-add-ai', btnAddAi],
+  ['btn-settings', btnSettings],
+  ['settings-modal', settingsModal]
+];
 let aiCommand = 'codex';
 const HEARTBEAT_INTERVAL_OPTIONS = ['5', '10', '15', '30'];
 const TERMINAL_BOTTOM_SNAP_LINES = 2;
@@ -863,6 +904,26 @@ function validateApiBridge() {
   );
 }
 
+function validateTerminalRuntime() {
+  if (!terminalManager || !terminalManager.__isFallback) return;
+  showInAppNotice(
+    '终端组件异常',
+    '终端渲染组件未正常加载。请重新安装最新版应用后重试。'
+  );
+}
+
+function validateUiRuntime() {
+  const missing = UI_REQUIRED_ELEMENTS
+    .filter(([, element]) => !element)
+    .map(([id]) => id);
+  if (missing.length === 0) return;
+
+  showInAppNotice(
+    '界面组件异常',
+    `缺少必要界面元素：${missing.join(', ')}。请重新安装最新版应用。`
+  );
+}
+
 function reportAsyncFailure(title, err, fallbackMessage) {
   console.warn(`${title}:`, err);
   const message = fallbackMessage || `原因：${formatErrorDetail(err)}`;
@@ -875,6 +936,15 @@ function runAsyncSafely(action, title, fallbackMessage) {
       .then(() => action(...args))
       .catch((err) => reportAsyncFailure(title, err, fallbackMessage));
   };
+}
+
+function bindClickSafely(element, handler, missingLabel) {
+  if (!element) {
+    console.warn(`[ui] Missing clickable element: ${missingLabel}`);
+    return false;
+  }
+  element.addEventListener('click', handler);
+  return true;
 }
 
 function registerGlobalRuntimeNoticeHandlers() {
@@ -1054,34 +1124,38 @@ debugLog('Shortcut listeners set up complete');
 
 // --- Button Listeners ---
 
-btnAddTerminal.addEventListener('click', runAsyncSafely(
+bindClickSafely(btnAddTerminal, runAsyncSafely(
   () => createNewTab(),
   '新建标签失败'
-));
-btnAddAi.addEventListener('click', runAsyncSafely(
+), 'btn-add-terminal');
+bindClickSafely(btnAddAi, runAsyncSafely(
   () => createNewAiTab(),
   '新建 AI 会话失败'
-));
-btnSettings.addEventListener('click', runAsyncSafely(
+), 'btn-add-ai');
+bindClickSafely(btnSettings, runAsyncSafely(
   () => openSettings(),
   '打开设置失败'
-));
-btnSettingsSave.addEventListener('click', runAsyncSafely(
+), 'btn-settings');
+bindClickSafely(btnSettingsSave, runAsyncSafely(
   () => saveSettings(),
   '保存设置失败'
-));
-btnSettingsCancel.addEventListener('click', () => closeSettings());
-btnScrollBottom.addEventListener('click', () => {
+), 'btn-settings-save');
+bindClickSafely(btnSettingsCancel, () => closeSettings(), 'btn-settings-cancel');
+bindClickSafely(btnScrollBottom, () => {
   debugLog('Scroll to bottom clicked');
   if (activeTabId) {
     terminalManager.ensureInputVisible(activeTabId);
     btnScrollBottom.classList.remove('visible');
   }
-});
+}, 'btn-scroll-bottom');
 
-settingsModal.addEventListener('click', (e) => {
-  if (e.target === settingsModal) closeSettings();
-});
+if (settingsModal) {
+  settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) closeSettings();
+  });
+} else {
+  console.warn('[ui] Missing settings modal element.');
+}
 
 terminalManager.onScrollStateChange(handleTerminalScrollStateChange);
 
@@ -1091,6 +1165,8 @@ terminalManager.onScrollStateChange(handleTerminalScrollStateChange);
 initTheme();
 initializeQuickSettings();
 validateApiBridge();
+validateTerminalRuntime();
+validateUiRuntime();
 window.addEventListener('beforeunload', persistTabSnapshot);
 
 async function bootstrapApp() {
