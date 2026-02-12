@@ -97,7 +97,7 @@ npm run dist
 gh release create v1.2.0 \
   --title "v1.2.0" \
   --notes "发布说明..." \
-  dist/DontbeTerm-1.2.0-arm64.dmg
+  dist/ShaoTerm-1.2.0-arm64.dmg
 ```
 
 ## 故障排除

@@ -1,7 +1,8 @@
 {
-  "name": "dontbeterm",
-  "version": "1.1.0",
-  "description": "AI coding CLI multi-session manager with smart tab naming",
+  "name": "shaoterm",
+  "version": "1.1.6",
+  "description": "ShaoTerm: AI coding CLI multi-session manager with smart tab naming",
+  "author": "shaoneng",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -24,8 +25,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.dontbeterm.app",
-    "productName": "DontbeTerm",
+    "appId": "com.shaoneng.shaoterm",
+    "productName": "ShaoTerm",
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": ["dmg"],

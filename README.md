@@ -1,10 +1,10 @@
 <div align="center">
-  <img src="icon.png" alt="DontbeTerm Icon" width="128" height="128">
-  <h1>DontbeTerm</h1>
+  <img src="icon.png" alt="ShaoTerm Icon" width="128" height="128">
+  <h1>ShaoTerm</h1>
   <p>多标签终端管理器，面向 Codex/Claude 等 AI CLI，支持 AI 智能标签命名。</p>
 </div>
 
-DontbeTerm 让你同时运行多个 AI 编码会话（默认 Codex），并通过 AI 自动识别每个对话的主题来命名标签页。
+ShaoTerm 让你同时运行多个 AI 编码会话（默认 Codex），并通过 AI 自动识别每个对话的主题来命名标签页。
 
 ## 功能特性
 
@@ -20,16 +20,22 @@ DontbeTerm 让你同时运行多个 AI 编码会话（默认 Codex），并通�
 
 | 平台 | 下载 |
 |------|------|
-| macOS (Apple Silicon / M系列芯片) | [DontbeTerm-Mac-AppleSilicon.dmg](https://github.com/dontbesilent2025/DontbeTerm/releases/latest) |
-| macOS (Intel) | [DontbeTerm-Mac-Intel.dmg](https://github.com/dontbesilent2025/DontbeTerm/releases/latest) |
-| Windows | [DontbeTerm-Windows-Setup.exe](https://github.com/dontbesilent2025/DontbeTerm/releases/latest) |
+| macOS (Apple Silicon / M系列芯片) | [ShaoTerm-arm64.dmg](https://github.com/shaoneng/ShaoTerm/releases/latest) |
+| macOS (Intel) | [ShaoTerm-x64.dmg](https://github.com/shaoneng/ShaoTerm/releases/latest) |
+| Windows | [ShaoTerm-Setup.exe](https://github.com/shaoneng/ShaoTerm/releases/latest) |
 
 ## 使用说明
 
 ### 1. 安装
 
-- **macOS**：打开 `.dmg` 文件，将 DontbeTerm 拖入"应用程序"文件夹。首次打开时，右键点击应用选择"打开"（未签名应用需要此操作）。
+- **macOS**：打开 `.dmg` 文件，将 ShaoTerm 拖入"应用程序"文件夹。首次打开时，右键点击应用选择"打开"（未签名应用需要此操作）。
 - **Windows**：运行 `.exe` 安装程序。
+
+如果 macOS 提示“已损坏，无法打开”，执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/ShaoTerm.app
+```
 
 ### 2. 配置 API（用于智能标签命名）
 

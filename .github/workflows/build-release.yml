@@ -53,15 +53,30 @@ jobs:
 
       - name: Build for macOS (x64)
         if: matrix.platform == 'mac' && matrix.arch == 'x64'
-        run: npm run dist -- --mac --x64 --publish never
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          npm run dist -- --mac --x64 --publish never --config.extraMetadata.version="$VERSION"
 
       - name: Build for macOS (arm64)
         if: matrix.platform == 'mac' && matrix.arch == 'arm64'
-        run: npm run dist -- --mac --arm64 --publish never
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          npm run dist -- --mac --arm64 --publish never --config.extraMetadata.version="$VERSION"
 
       - name: Build for Windows
         if: matrix.platform == 'win'
-        run: npm run dist -- --win --publish never
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          npm run dist -- --win --publish never --config.extraMetadata.version="$VERSION"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -104,9 +119,9 @@ jobs:
 
             ### 下载
 
-            - **macOS (Apple Silicon)**: DontbeTerm-${{ steps.get_version.outputs.VERSION }}-arm64.dmg
-            - **macOS (Intel)**: DontbeTerm-${{ steps.get_version.outputs.VERSION }}-x64.dmg
-            - **Windows**: DontbeTerm-${{ steps.get_version.outputs.VERSION }}-Setup.exe
+            - **macOS (Apple Silicon)**: ShaoTerm-${{ steps.get_version.outputs.VERSION }}-arm64.dmg
+            - **macOS (Intel)**: ShaoTerm-${{ steps.get_version.outputs.VERSION }}-x64.dmg
+            - **Windows**: ShaoTerm-${{ steps.get_version.outputs.VERSION }}-Setup.exe
 
             ---
             🤖 由 GitHub Actions 自动构建

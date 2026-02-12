@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# DontbeTerm Release Script
+# ShaoTerm Release Script
 # 自动化版本发布流程
 
 set -e  # Exit on error
@@ -11,7 +11,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}=== DontbeTerm Release Script ===${NC}\n"
+echo -e "${GREEN}=== ShaoTerm Release Script ===${NC}\n"
 
 # Check if version argument is provided
 if [ -z "$1" ]; then
@@ -76,7 +76,7 @@ $RELEASE_NOTES
 
 ## 下载
 
-- macOS (Apple Silicon): DontbeTerm-$VERSION-arm64.dmg
+- macOS (Apple Silicon): ShaoTerm-$VERSION-arm64.dmg
 
 ---
 🤖 由 [Claude Code](https://claude.com/claude-code) 自动发布"
@@ -84,13 +84,13 @@ $RELEASE_NOTES
 gh release create "v$VERSION" \
   --title "v$VERSION" \
   --notes "$RELEASE_BODY" \
-  "dist/DontbeTerm-$VERSION-arm64.dmg"
+  "dist/ShaoTerm-$VERSION-arm64.dmg"
 
 echo "✓ GitHub Release 已创建"
 
 # Step 7: Get release URL
 echo -e "\n${GREEN}[7/7] 获取 Release 链接...${NC}"
-RELEASE_URL="https://github.com/dontbesilent2025/DontbeTerm/releases/tag/v$VERSION"
+RELEASE_URL="https://github.com/shaoneng/ShaoTerm/releases/tag/v$VERSION"
 echo -e "✓ Release URL: ${GREEN}$RELEASE_URL${NC}"
 
 echo -e "\n${GREEN}=== 发布完成! ===${NC}"

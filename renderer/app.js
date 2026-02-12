@@ -325,7 +325,7 @@ function copyLogsToClipboard() {
     return `[${log.timestamp}] [${log.type.toUpperCase()}] ${log.message}`;
   }).join('\n');
 
-  const fullReport = `=== DontbeTerm Debug Logs ===
+  const fullReport = `=== ShaoTerm Debug Logs ===
 Generated: ${new Date().toISOString()}
 Total logs: ${debugLogs.length}
 
