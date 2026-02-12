@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('api', {
   // Directory picker
   selectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),
   confirmDialog: (title, message, detail) => ipcRenderer.invoke('dialog:confirm', { title, message, detail }),
+  notifyInfo: (title, body) => ipcRenderer.invoke('notify:info', { title, body }),
 
   // Terminal operations
   createTerminal: (tabId, cwd, autoCommand) => ipcRenderer.invoke('terminal:create', { tabId, cwd, autoCommand }),

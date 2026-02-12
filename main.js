@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, Notification } = require('electron');
 const path = require('path');
 const pty = require('node-pty');
 const topicDetector = require('./lib/topic-detector');
@@ -110,6 +110,24 @@ ipcMain.handle('dialog:confirm', async (event, { title, message, detail }) => {
   });
 
   return { confirmed: result.response === 1 };
+});
+
+ipcMain.handle('notify:info', async (event, { title, body }) => {
+  try {
+    if (!Notification || typeof Notification.isSupported !== 'function' || !Notification.isSupported()) {
+      return { shown: false };
+    }
+
+    const notification = new Notification({
+      title: title || 'ShaoTerm 提示',
+      body: body || '',
+      silent: false
+    });
+    notification.show();
+    return { shown: true };
+  } catch (err) {
+    return { shown: false, error: err.message };
+  }
 });
 
 // --- IPC: Terminal management ---

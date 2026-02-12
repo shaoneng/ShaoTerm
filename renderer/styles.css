@@ -402,6 +402,50 @@ body {
   animation: fadeInUp 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* Non-blocking notices */
+#notice-stack {
+  position: fixed;
+  top: var(--space-lg);
+  right: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  z-index: 3000;
+  pointer-events: none;
+}
+
+.notice-card {
+  width: min(420px, calc(100vw - 2 * var(--space-lg)));
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-lg);
+  background: var(--bg-toolbar);
+  border: 0.5px solid var(--border);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.notice-card.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.notice-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--warning);
+  margin-bottom: 2px;
+}
+
+.notice-message {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
 @keyframes fadeInUp {
   from {
     opacity: 0;

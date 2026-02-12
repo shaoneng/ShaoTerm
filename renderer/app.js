@@ -67,6 +67,7 @@ console.log('Debug logging system initialized');
 const terminalManager = new TerminalManager();
 const tabs = []; // { id, title, manuallyRenamed }
 let activeTabId = null;
+let inAppNoticeContainer = null;
 
 // DOM references
 const tabBar = document.getElementById('tab-bar');
@@ -358,6 +359,59 @@ async function saveSettings() {
   closeSettings();
 }
 
+function ensureInAppNoticeContainer() {
+  if (inAppNoticeContainer && document.body.contains(inAppNoticeContainer)) {
+    return inAppNoticeContainer;
+  }
+
+  inAppNoticeContainer = document.createElement('div');
+  inAppNoticeContainer.id = 'notice-stack';
+  document.body.appendChild(inAppNoticeContainer);
+  return inAppNoticeContainer;
+}
+
+function showInAppNotice(title, message) {
+  const container = ensureInAppNoticeContainer();
+  const notice = document.createElement('div');
+  notice.className = 'notice-card';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'notice-title';
+  titleEl.textContent = title;
+
+  const messageEl = document.createElement('div');
+  messageEl.className = 'notice-message';
+  messageEl.textContent = message;
+
+  notice.appendChild(titleEl);
+  notice.appendChild(messageEl);
+  container.appendChild(notice);
+
+  requestAnimationFrame(() => {
+    notice.classList.add('visible');
+  });
+
+  setTimeout(() => {
+    notice.classList.remove('visible');
+    setTimeout(() => {
+      notice.remove();
+    }, 220);
+  }, 5200);
+}
+
+async function showNonBlockingNotice(title, message) {
+  try {
+    const result = await window.api.notifyInfo(title, message);
+    if (result && result.shown) {
+      return;
+    }
+  } catch (err) {
+    console.warn('System notification unavailable, falling back to in-app notice:', err);
+  }
+
+  showInAppNotice(title, message);
+}
+
 // --- IPC Listeners ---
 
 window.api.onTerminalOutput(({ tabId, data }) => {
@@ -371,26 +425,16 @@ window.api.onTerminalClosed(({ tabId }) => {
   }
 });
 
-window.api.onTerminalConfirmNeeded(async ({ tabId, prompt }) => {
+window.api.onTerminalConfirmNeeded(({ tabId, prompt }) => {
   const tabData = tabs.find((t) => t.id === tabId);
   if (!tabData) return;
 
-  const message = `会话“${tabData.title}”检测到确认提示`;
-  const detail = `${prompt ? `提示内容：${prompt}\n\n` : ''}请切换到该会话并在终端中输入确认选项（如 y/yes）。`;
+  const compactPrompt = (prompt || '').replace(/\s+/g, ' ').trim();
+  const message = compactPrompt
+    ? `会话“${tabData.title}”需要确认：${compactPrompt}`
+    : `会话“${tabData.title}”需要确认，请切换到该会话输入 y/yes 等选项。`;
 
-  let confirmed = false;
-  try {
-    const result = await window.api.confirmDialog('需要确认', message, detail);
-    confirmed = !!(result && result.confirmed);
-  } catch (err) {
-    console.warn('Failed to show confirm-needed popup:', err);
-    confirmed = window.confirm(`${message}\n${detail}`);
-  }
-
-  if (confirmed) {
-    switchToTabById(tabId);
-    terminalManager.focus(tabId);
-  }
+  showNonBlockingNotice('需要确认', message);
 });
 
 window.api.onTopicStatus(({ tabId, status, topic }) => {
