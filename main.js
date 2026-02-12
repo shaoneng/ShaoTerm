@@ -302,7 +302,7 @@ function buildMenu() {
       label: '查看',
       submenu: [
         {
-          label: '刷新主题',
+          label: '刷新标签分析',
           accelerator: 'CmdOrCtrl+R',
           click: () => {
             if (win) win.webContents.send('shortcut:refresh-topics');
