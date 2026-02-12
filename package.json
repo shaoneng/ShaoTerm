@@ -1,17 +1,17 @@
 {
   "name": "shaoterm",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "description": "ShaoTerm: AI coding CLI multi-session manager with smart tab naming",
   "author": "shaoneng",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "rebuild": "electron-rebuild",
-    "postinstall": "electron-rebuild",
-    "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win",
-    "dist:all": "electron-builder --mac --win"
+    "postinstall": "electron-rebuild && node scripts/fix-node-pty-helper-perms.js",
+    "dist": "node scripts/fix-node-pty-helper-perms.js && electron-builder",
+    "dist:mac": "node scripts/fix-node-pty-helper-perms.js && electron-builder --mac",
+    "dist:win": "node scripts/fix-node-pty-helper-perms.js && electron-builder --win",
+    "dist:all": "node scripts/fix-node-pty-helper-perms.js && electron-builder --mac --win"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
@@ -60,6 +60,7 @@
       "lib/**/*",
       "node_modules/**/*"
     ],
+    "afterPack": "scripts/after-pack.js",
     "extraMetadata": {
       "main": "main.js"
     }

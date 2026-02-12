@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, Menu, dialog, Notification } = require('electron');
+const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
 const topicDetector = require('./lib/topic-detector');
@@ -7,6 +8,66 @@ let win;
 const terminals = new Map();
 const confirmAlertAt = new Map();
 const CONFIRM_ALERT_COOLDOWN_MS = 10000;
+
+function toUnpackedPath(filePath) {
+  return filePath
+    .replace('app.asar', 'app.asar.unpacked')
+    .replace('node_modules.asar', 'node_modules.asar.unpacked');
+}
+
+function setExecutableIfExists(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return false;
+
+  try {
+    const mode = fs.statSync(filePath).mode;
+    const desiredMode = mode | 0o111;
+    if (mode !== desiredMode) {
+      fs.chmodSync(filePath, desiredMode);
+    }
+    return true;
+  } catch (err) {
+    console.warn('[pty] Failed to ensure executable permission:', filePath, err.message);
+    return false;
+  }
+}
+
+function ensureNodePtySpawnHelperExecutable() {
+  if (process.platform !== 'darwin') return;
+
+  const candidates = new Set();
+  const archDirs = [`darwin-${process.arch}`, 'darwin-arm64', 'darwin-x64'];
+
+  try {
+    const unixTerminalPath = require.resolve('node-pty/lib/unixTerminal');
+    const libDir = path.dirname(unixTerminalPath);
+    for (const archDir of archDirs) {
+      candidates.add(path.resolve(libDir, '..', 'prebuilds', archDir, 'spawn-helper'));
+    }
+    candidates.add(path.resolve(libDir, '..', 'build', 'Release', 'spawn-helper'));
+  } catch (err) {
+    console.warn('[pty] Unable to resolve node-pty unixTerminal path:', err.message);
+  }
+
+  for (const archDir of archDirs) {
+    candidates.add(path.join(__dirname, 'node_modules', 'node-pty', 'prebuilds', archDir, 'spawn-helper'));
+  }
+  candidates.add(path.join(__dirname, 'node_modules', 'node-pty', 'build', 'Release', 'spawn-helper'));
+
+  const expanded = new Set();
+  for (const filePath of candidates) {
+    expanded.add(filePath);
+    expanded.add(toUnpackedPath(filePath));
+  }
+
+  let fixedCount = 0;
+  for (const filePath of expanded) {
+    if (setExecutableIfExists(filePath)) fixedCount += 1;
+  }
+
+  if (fixedCount > 0) {
+    console.log(`[pty] Ensured executable permission on ${fixedCount} spawn-helper path(s).`);
+  }
+}
 
 const CONFIRM_PROMPT_PATTERNS = [
   /\b(y\/n|yes\/no|y\/N|Y\/n)\b/,
@@ -368,7 +429,10 @@ function buildMenu() {
 
 // --- App lifecycle ---
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  ensureNodePtySpawnHelperExecutable();
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   for (const [, entry] of terminals) {
