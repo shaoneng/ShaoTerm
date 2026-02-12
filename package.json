@@ -1,6 +1,6 @@
 {
   "name": "shaoterm",
-  "version": "1.1.12",
+  "version": "1.1.13",
   "description": "ShaoTerm: AI coding CLI multi-session manager with smart tab naming",
   "author": "shaoneng",
   "main": "main.js",
@@ -8,11 +8,11 @@
     "start": "electron .",
     "rebuild": "electron-rebuild",
     "postinstall": "node scripts/fix-node-pty-helper-perms.js",
-    "dist": "node scripts/fix-node-pty-helper-perms.js && electron-builder --config.npmRebuild=false",
-    "dist:mac": "node scripts/fix-node-pty-helper-perms.js && electron-builder --mac --config.npmRebuild=false",
-    "dist:mac:dir": "node scripts/fix-node-pty-helper-perms.js && electron-builder --mac --dir --config.npmRebuild=false",
-    "dist:win": "node scripts/fix-node-pty-helper-perms.js && electron-builder --win --config.npmRebuild=false",
-    "dist:all": "node scripts/fix-node-pty-helper-perms.js && electron-builder --mac --win --config.npmRebuild=false"
+    "dist": "node scripts/fix-node-pty-helper-perms.js && electron-builder",
+    "dist:mac": "node scripts/fix-node-pty-helper-perms.js && electron-builder --mac",
+    "dist:mac:dir": "node scripts/fix-node-pty-helper-perms.js && electron-builder --mac --dir",
+    "dist:win": "node scripts/fix-node-pty-helper-perms.js && electron-builder --win",
+    "dist:all": "node scripts/fix-node-pty-helper-perms.js && electron-builder --mac --win"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
