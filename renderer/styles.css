@@ -31,7 +31,6 @@
   --space-md: 16px;
   --space-lg: 24px;
   --space-xl: 32px;
-  --composer-reserved: 18px;
   --terminal-gutter-x: clamp(10px, 1.3vw, 20px);
   --terminal-gutter-y: clamp(8px, 1vh, 16px);
   --terminal-surface-radius: clamp(10px, 1.1vmin, 14px);
@@ -182,6 +181,46 @@ body {
 .tab.active {
   background: var(--bg-primary);
   box-shadow: var(--shadow-sm);
+}
+
+.tab-heartbeat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--text-tertiary);
+  opacity: 0.55;
+  flex-shrink: 0;
+  transition: opacity 0.18s ease, transform 0.18s ease, background-color 0.18s ease;
+}
+
+.tab:hover .tab-heartbeat-dot,
+.tab.active .tab-heartbeat-dot {
+  opacity: 0.95;
+}
+
+.tab-heartbeat-dot.status-unknown {
+  background: color-mix(in srgb, var(--text-tertiary) 75%, var(--bg-tertiary));
+}
+
+.tab-heartbeat-dot.status-running {
+  background: color-mix(in srgb, var(--accent) 78%, #78b6ff);
+}
+
+.tab-heartbeat-dot.status-waiting {
+  background: var(--warning);
+}
+
+.tab-heartbeat-dot.status-success {
+  background: var(--success);
+}
+
+.tab-heartbeat-dot.status-error {
+  background: var(--danger);
+}
+
+.tab-heartbeat-dot.status-ended {
+  background: color-mix(in srgb, var(--text-tertiary) 70%, var(--bg-tertiary));
+  opacity: 0.42;
 }
 
 .tab-title {
@@ -522,140 +561,10 @@ body {
   background: var(--active);
 }
 
-/* Follow-up composer */
-#composer-shell {
-  width: min(760px, calc(100% - 2 * var(--space-lg)));
-  margin: 0 auto var(--space-md);
-  padding: 12px;
-  border-radius: 24px;
-  border: 0.5px solid var(--border);
-  background: color-mix(in srgb, var(--bg-secondary) 78%, var(--bg-primary));
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-  flex-shrink: 0;
-}
-
-#composer-topbar {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-}
-
-.composer-settings-btn {
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 14px;
-  border: 0.5px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.composer-settings-btn:hover {
-  background: var(--hover);
-  color: var(--text-primary);
-}
-
-#composer-input {
-  width: 100%;
-  min-height: 52px;
-  max-height: 132px;
-  resize: none;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 15px;
-  line-height: 1.35;
-  padding: 4px 10px 0;
-  user-select: text;
-}
-
-#composer-input::placeholder {
-  color: var(--text-tertiary);
-}
-
-#composer-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 6px 2px;
-}
-
-.composer-icon-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: 0.5px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 24px;
-  line-height: 1;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.composer-icon-btn:hover {
-  background: var(--hover);
-  color: var(--text-primary);
-}
-
-.composer-select-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  height: 34px;
-  border-radius: 18px;
-  background: transparent;
-  border: 0.5px solid transparent;
-  transition: all 0.15s ease;
-}
-
-.composer-select-wrap:hover {
-  background: var(--hover);
-  border-color: var(--border);
-}
-
-.composer-select {
-  appearance: none;
-  -webkit-appearance: none;
-  height: 100%;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  padding: 0 28px 0 10px;
-  font-size: 14px;
-  cursor: pointer;
-  outline: none;
-}
-
-.composer-select-wrap::after {
-  content: 'v';
-  position: absolute;
-  right: 10px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  pointer-events: none;
-}
-
-.composer-icon-btn:focus-visible,
-.composer-settings-btn:focus-visible,
-.composer-select:focus-visible,
-#composer-input:focus-visible {
-  outline: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
-  outline-offset: 1px;
-}
-
 /* Scroll to Bottom Button - macOS Style */
 .scroll-bottom-btn {
   position: fixed;
-  bottom: calc(var(--space-lg) + var(--composer-reserved));
+  bottom: calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));
   right: var(--space-lg);
   width: 36px;
   height: 36px;
@@ -759,7 +668,6 @@ body {
 
 @media (max-width: 900px) {
   :root {
-    --composer-reserved: 14px;
     --terminal-gutter-x: clamp(8px, 2.2vw, 12px);
     --terminal-gutter-y: clamp(6px, 1.6vh, 10px);
     --terminal-surface-radius: 10px;

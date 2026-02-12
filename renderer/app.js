@@ -1,6 +1,18 @@
 /* global TerminalManager */
 
 // --- Debug Logging System ---
+const DEBUG_MODE_STORAGE_KEY = 'shaoterm.debug-mode.v1';
+const DEBUG_MODE_QUERY_KEY = 'debug';
+const DEBUG_MODE = (() => {
+  try {
+    const search = new URLSearchParams(window.location.search || '');
+    if (search.get(DEBUG_MODE_QUERY_KEY) === '1') return true;
+    return window.localStorage.getItem(DEBUG_MODE_STORAGE_KEY) === '1';
+  } catch (err) {
+    return false;
+  }
+})();
+
 const debugLogs = [];
 const originalConsole = {
   log: console.log,
@@ -8,6 +20,11 @@ const originalConsole = {
   warn: console.warn,
   info: console.info
 };
+
+function debugLog(...args) {
+  if (!DEBUG_MODE) return;
+  originalConsole.log.apply(console, args);
+}
 
 function addLog(type, ...args) {
   const timestamp = new Date().toISOString();
@@ -30,42 +47,44 @@ function addLog(type, ...args) {
   }
 }
 
-// Override console methods
-console.log = function(...args) {
-  addLog('log', ...args);
-  originalConsole.log.apply(console, args);
-};
+if (DEBUG_MODE) {
+  // Override console methods only in debug mode.
+  console.log = function(...args) {
+    addLog('log', ...args);
+    originalConsole.log.apply(console, args);
+  };
 
-console.error = function(...args) {
-  addLog('error', ...args);
-  originalConsole.error.apply(console, args);
-};
+  console.error = function(...args) {
+    addLog('error', ...args);
+    originalConsole.error.apply(console, args);
+  };
 
-console.warn = function(...args) {
-  addLog('warn', ...args);
-  originalConsole.warn.apply(console, args);
-};
+  console.warn = function(...args) {
+    addLog('warn', ...args);
+    originalConsole.warn.apply(console, args);
+  };
 
-console.info = function(...args) {
-  addLog('info', ...args);
-  originalConsole.info.apply(console, args);
-};
+  console.info = function(...args) {
+    addLog('info', ...args);
+    originalConsole.info.apply(console, args);
+  };
 
-// Capture unhandled errors
-window.addEventListener('error', (event) => {
-  addLog('error', `Unhandled error: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`);
-});
+  // Capture unhandled errors
+  window.addEventListener('error', (event) => {
+    addLog('error', `Unhandled error: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`);
+  });
 
-window.addEventListener('unhandledrejection', (event) => {
-  addLog('error', `Unhandled promise rejection: ${event.reason}`);
-});
+  window.addEventListener('unhandledrejection', (event) => {
+    addLog('error', `Unhandled promise rejection: ${event.reason}`);
+  });
 
-console.log('Debug logging system initialized');
+  console.log('Debug logging system initialized');
+}
 
 // --- App State ---
 
 const terminalManager = new TerminalManager();
-const tabs = []; // { id, title, manuallyRenamed, cwd, autoCommand }
+const tabs = []; // { id, title, manuallyRenamed, cwd, autoCommand, heartbeatStatus, heartbeatSummary, heartbeatAnalysis, heartbeatAt }
 let activeTabId = null;
 let inAppNoticeContainer = null;
 const TAB_SNAPSHOT_KEY = 'shaoterm.tab-snapshot.v1';
@@ -87,12 +106,114 @@ const btnSettingsCancel = document.getElementById('btn-settings-cancel');
 const quickHeartbeatEnabled = document.getElementById('quick-heartbeat-enabled');
 const quickHeartbeatInterval = document.getElementById('quick-heartbeat-interval');
 let aiCommand = 'codex';
-const HEARTBEAT_INTERVAL_OPTIONS = ['1', '3', '5', '10'];
+const HEARTBEAT_INTERVAL_OPTIONS = ['5', '10', '15', '30'];
+const TERMINAL_BOTTOM_SNAP_LINES = 2;
+const HEARTBEAT_STATUS_TEXT = {
+  unknown: '暂无心跳',
+  running: '进行中',
+  waiting: '待输入',
+  success: '阶段完成',
+  error: '异常',
+  ended: '已结束'
+};
+
+function normalizeHeartbeatStatus(status, fallbackText = '') {
+  const raw = String(status || fallbackText || '').trim();
+  if (!raw) return 'unknown';
+  if (/(异常|error|failed|failure|fatal|panic|traceback)/i.test(raw)) return 'error';
+  if (/(待输入|waiting|confirm|yes\/no|y\/n|是否继续|请确认)/i.test(raw)) return 'waiting';
+  if (/(阶段完成|success|done|completed|finished|完成)/i.test(raw)) return 'success';
+  if (/(已结束|ended|exit|closed)/i.test(raw)) return 'ended';
+  if (/(进行中|running|progress)/i.test(raw)) return 'running';
+  return 'running';
+}
+
+function formatHeartbeatTime(isoString) {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
+}
+
+function formatHeartbeatTooltip(tabData) {
+  if (!tabData) return '';
+  const status = HEARTBEAT_STATUS_TEXT[tabData.heartbeatStatus || 'unknown'] || HEARTBEAT_STATUS_TEXT.unknown;
+  const at = formatHeartbeatTime(tabData.heartbeatAt);
+  const summary = String(tabData.heartbeatSummary || '').trim();
+  const analysis = String(tabData.heartbeatAnalysis || '').trim();
+  const lines = [];
+  lines.push(`心跳：${status}${at ? ` · ${at}` : ''}`);
+  if (summary) lines.push(`总结：${summary}`);
+  if (analysis) lines.push(`分析：${analysis}`);
+  return lines.join('\n');
+}
+
+function renderTabHeartbeat(tabId) {
+  const tabData = tabs.find((t) => t.id === tabId);
+  if (!tabData) return;
+  const tabEl = tabBar.querySelector(`.tab[data-tab-id="${tabId}"]`);
+  if (!tabEl) return;
+
+  const dotEl = tabEl.querySelector('.tab-heartbeat-dot');
+  if (dotEl) {
+    dotEl.className = `tab-heartbeat-dot status-${tabData.heartbeatStatus || 'unknown'}`;
+    dotEl.setAttribute('aria-label', HEARTBEAT_STATUS_TEXT[tabData.heartbeatStatus || 'unknown'] || HEARTBEAT_STATUS_TEXT.unknown);
+  }
+
+  tabEl.title = formatHeartbeatTooltip(tabData);
+}
+
+function updateTabHeartbeatMeta(tabId, patch = {}) {
+  const tabData = tabs.find((t) => t.id === tabId);
+  if (!tabData) return;
+  if (patch.status !== undefined) {
+    tabData.heartbeatStatus = normalizeHeartbeatStatus(patch.status, `${patch.summary || ''}\n${patch.analysis || ''}`);
+  }
+  if (patch.summary !== undefined) {
+    tabData.heartbeatSummary = String(patch.summary || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  }
+  if (patch.analysis !== undefined) {
+    tabData.heartbeatAnalysis = String(patch.analysis || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+  }
+  if (patch.at !== undefined) {
+    tabData.heartbeatAt = String(patch.at || '').trim();
+  } else if (patch.status !== undefined || patch.summary !== undefined || patch.analysis !== undefined) {
+    tabData.heartbeatAt = new Date().toISOString();
+  }
+  renderTabHeartbeat(tabId);
+}
+
+function updateScrollBottomButton(distanceToBottom) {
+  if (distanceToBottom > 0 && distanceToBottom <= TERMINAL_BOTTOM_SNAP_LINES) {
+    terminalManager.scrollToBottom(activeTabId);
+    return;
+  }
+  btnScrollBottom.classList.toggle('visible', distanceToBottom > TERMINAL_BOTTOM_SNAP_LINES);
+}
+
+function syncScrollBottomButton() {
+  if (!activeTabId) {
+    btnScrollBottom.classList.remove('visible');
+    return;
+  }
+  const distanceToBottom = terminalManager.getScrollDistance(activeTabId);
+  updateScrollBottomButton(distanceToBottom);
+}
+
+function handleTerminalScrollStateChange({ tabId, distanceToBottom }) {
+  if (tabId !== activeTabId) return;
+  updateScrollBottomButton(distanceToBottom);
+}
 
 function normalizeHeartbeatIntervalMs(value) {
   const ms = Number(value);
-  const roundedMinutes = Math.round((Number.isFinite(ms) ? ms : 3 * 60 * 1000) / 60000);
-  const normalizedMinutes = HEARTBEAT_INTERVAL_OPTIONS.includes(String(roundedMinutes)) ? roundedMinutes : 3;
+  const roundedMinutes = Math.round((Number.isFinite(ms) ? ms : 10 * 60 * 1000) / 60000);
+  const normalizedMinutes = HEARTBEAT_INTERVAL_OPTIONS.includes(String(roundedMinutes)) ? roundedMinutes : 10;
   return normalizedMinutes * 60 * 1000;
 }
 
@@ -113,10 +234,10 @@ function applyQuickSettings(config = {}) {
   }
 
   if (quickHeartbeatInterval) {
-    const minutes = Math.round((Number(config.heartbeatIntervalMs) || 3 * 60 * 1000) / 60000);
+    const minutes = Math.round((Number(config.heartbeatIntervalMs) || 10 * 60 * 1000) / 60000);
     quickHeartbeatInterval.value = HEARTBEAT_INTERVAL_OPTIONS.includes(String(minutes))
       ? String(minutes)
-      : '3';
+      : '10';
   }
 }
 
@@ -228,6 +349,7 @@ async function createNewTab(options = {}) {
   const resolvedOptions = typeof options === 'string' ? { autoCommand: options } : (options || {});
   const skipDirectoryPrompt = !!resolvedOptions.skipDirectoryPrompt;
   const autoCommand = resolvedOptions.autoCommand ? normalizeAiCommand(resolvedOptions.autoCommand) : null;
+  const previousActiveTabId = activeTabId;
   let cwd = resolvedOptions.cwd || null;
   let dirName = resolvedOptions.title || '终端';
 
@@ -247,13 +369,21 @@ async function createNewTab(options = {}) {
     title: dirName,
     manuallyRenamed: !!resolvedOptions.manuallyRenamed,
     cwd,
-    autoCommand
+    autoCommand,
+    heartbeatStatus: 'unknown',
+    heartbeatSummary: '',
+    heartbeatAnalysis: '',
+    heartbeatAt: ''
   };
   tabs.push(tabData);
 
   const tabEl = document.createElement('div');
   tabEl.className = 'tab';
   tabEl.dataset.tabId = tabId;
+
+  const heartbeatDot = document.createElement('span');
+  heartbeatDot.className = 'tab-heartbeat-dot status-unknown';
+  heartbeatDot.setAttribute('aria-hidden', 'true');
 
   const titleSpan = document.createElement('span');
   titleSpan.className = 'tab-title';
@@ -263,10 +393,12 @@ async function createNewTab(options = {}) {
   closeBtn.className = 'tab-close';
   closeBtn.textContent = '\u00d7';
 
+  tabEl.appendChild(heartbeatDot);
   tabEl.appendChild(titleSpan);
   tabEl.appendChild(closeBtn);
   // Insert before both add buttons
   tabBar.insertBefore(tabEl, btnAddTerminal);
+  renderTabHeartbeat(tabId);
 
   tabEl.addEventListener('click', (e) => {
     if (!e.target.classList.contains('tab-close')) {
@@ -299,10 +431,47 @@ async function createNewTab(options = {}) {
   });
 
   const { cols, rows } = terminalManager.create(tabId, wrapper);
-
-  await window.api.createTerminal(tabId, cwd, autoCommand || null);
+  let createResult = null;
+  try {
+    createResult = await window.api.createTerminal(tabId, cwd, autoCommand || null);
+  } catch (err) {
+    console.warn('Failed to create terminal session:', err);
+    terminalManager.destroy(tabId);
+    const tabIndex = tabs.findIndex((t) => t.id === tabId);
+    if (tabIndex >= 0) tabs.splice(tabIndex, 1);
+    const staleTabEl = tabBar.querySelector(`.tab[data-tab-id="${tabId}"]`);
+    if (staleTabEl) staleTabEl.remove();
+    activeTabId = previousActiveTabId && tabs.some((t) => t.id === previousActiveTabId)
+      ? previousActiveTabId
+      : (tabs[0] ? tabs[0].id : null);
+    if (activeTabId) {
+      switchToTabById(activeTabId);
+    } else {
+      syncScrollBottomButton();
+    }
+    showInAppNotice('会话创建失败', '无法创建终端会话，请检查 shell 环境后重试。');
+    return null;
+  }
+  if (createResult && createResult.resolvedCwd) {
+    tabData.cwd = createResult.resolvedCwd;
+  }
+  if (createResult && createResult.cwdFallbackApplied) {
+    const requestedPath = String(createResult.requestedCwd || '').trim();
+    const fallbackPath = String(createResult.resolvedCwd || '').trim();
+    const fallbackMessage = requestedPath
+      ? `目录不可用，已自动切换到：${fallbackPath}`
+      : `未提供目录，已使用默认目录：${fallbackPath}`;
+    showInAppNotice('目录已自动回退', fallbackMessage);
+  }
+  updateTabHeartbeatMeta(tabId, {
+    status: 'running',
+    summary: '会话已启动',
+    analysis: tabData.cwd ? `工作目录：${tabData.cwd}` : '',
+    at: new Date().toISOString()
+  });
   window.api.resizeTerminal(tabId, cols, rows);
   terminalManager.focus(tabId);
+  syncScrollBottomButton();
   persistTabSnapshot();
   return tabId;
 }
@@ -322,6 +491,7 @@ function switchToTabById(tabId) {
   });
   requestAnimationFrame(() => {
     terminalManager.focus(tabId);
+    syncScrollBottomButton();
   });
   persistTabSnapshot();
 }
@@ -333,20 +503,20 @@ function switchToTabByIndex(index) {
 }
 
 function switchToPrevTab() {
-  console.log('switchToPrevTab called');
+  debugLog('switchToPrevTab called');
   if (tabs.length === 0) return;
   const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
   const prevIndex = currentIndex > 0 ? currentIndex - 1 : tabs.length - 1;
-  console.log(`Switching from tab ${currentIndex} to ${prevIndex}`);
+  debugLog(`Switching from tab ${currentIndex} to ${prevIndex}`);
   switchToTabById(tabs[prevIndex].id);
 }
 
 function switchToNextTab() {
-  console.log('switchToNextTab called');
+  debugLog('switchToNextTab called');
   if (tabs.length === 0) return;
   const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
   const nextIndex = currentIndex < tabs.length - 1 ? currentIndex + 1 : 0;
-  console.log(`Switching from tab ${currentIndex} to ${nextIndex}`);
+  debugLog(`Switching from tab ${currentIndex} to ${nextIndex}`);
   switchToTabById(tabs[nextIndex].id);
 }
 
@@ -485,7 +655,7 @@ async function loadRuntimeSettings() {
       baseUrl: '',
       aiCommand: 'codex -m gpt-5.3-codex',
       heartbeatEnabled: true,
-      heartbeatIntervalMs: 3 * 60 * 1000,
+      heartbeatIntervalMs: 10 * 60 * 1000,
       heartbeatPreferSessionAi: false
     });
     aiCommand = fallback.aiCommand;
@@ -522,7 +692,7 @@ async function saveSettings() {
 
 async function saveQuickHeartbeatSettings() {
   const nextHeartbeatEnabled = !!quickHeartbeatEnabled.checked;
-  const nextHeartbeatIntervalMs = (Number(quickHeartbeatInterval.value) || 3) * 60 * 1000;
+  const nextHeartbeatIntervalMs = (Number(quickHeartbeatInterval.value) || 10) * 60 * 1000;
   const current = normalizeRuntimeSettings(await window.api.getSettings());
   await persistRuntimeSettings({
     ...current,
@@ -649,20 +819,28 @@ window.api.onTerminalOutput(({ tabId, data }) => {
 window.api.onTerminalClosed(({ tabId }) => {
   const tabData = tabs.find((t) => t.id === tabId);
   if (tabData) {
+    updateTabHeartbeatMeta(tabId, {
+      status: 'ended',
+      summary: '会话已结束',
+      analysis: '',
+      at: new Date().toISOString()
+    });
     updateTabTitle(tabId, tabData.title + ' (ended)', false);
   }
 });
 
-window.api.onTerminalHeartbeatSummary(({ tabId, summary, analysis }) => {
+window.api.onTerminalHeartbeatSummary(({ tabId, summary, analysis, status, at }) => {
   const tabData = tabs.find((t) => t.id === tabId);
   const tabTitle = tabData && tabData.title ? tabData.title : '当前会话';
   const compactSummary = (summary || '会话进行中').replace(/\s+/g, ' ').trim();
   const compactAnalysis = (analysis || '').replace(/\s+/g, ' ').trim();
-  const message = compactAnalysis
-    ? `${compactSummary}\n${compactAnalysis}`
-    : compactSummary;
-
-  showNonBlockingNotice(`心跳总结 · ${tabTitle}`, message);
+  updateTabHeartbeatMeta(tabId, {
+    status,
+    summary: compactSummary,
+    analysis: compactAnalysis,
+    at
+  });
+  debugLog(`[heartbeat][silent] ${tabTitle}: ${compactSummary}${compactAnalysis ? ` | ${compactAnalysis}` : ''}`);
 });
 
 window.api.onTerminalConfirmNeeded(({ tabId, prompt }) => {
@@ -670,6 +848,12 @@ window.api.onTerminalConfirmNeeded(({ tabId, prompt }) => {
   if (!tabData) return;
 
   const compactPrompt = (prompt || '').replace(/\s+/g, ' ').trim();
+  updateTabHeartbeatMeta(tabId, {
+    status: 'waiting',
+    summary: compactPrompt ? '检测到确认提示' : '会话等待输入',
+    analysis: compactPrompt || '请查看该会话最新输出并决定下一步。',
+    at: new Date().toISOString()
+  });
   const message = compactPrompt
     ? `会话“${tabData.title}”需要确认：${compactPrompt}`
     : `会话“${tabData.title}”检测到确认信息，请查看最新输出。`;
@@ -686,18 +870,18 @@ window.api.onTopicStatus(({ tabId, status, topic }) => {
 
 // Handle file drops from main process
 window.api.onFileDrop(({ paths }) => {
-  console.log('File drop from main process:', paths);
+  debugLog('File drop from main process:', paths);
   if (activeTabId && paths && paths.length > 0) {
     const quotedPaths = paths.map(p => p.includes(' ') ? `"${p}"` : p);
     const pathString = quotedPaths.join(' ');
-    console.log('Sending file paths to terminal:', pathString);
+    debugLog('Sending file paths to terminal:', pathString);
     window.api.sendTerminalData(activeTabId, pathString);
   }
 });
 
 // --- Shortcut Listeners ---
 
-console.log('Setting up shortcut listeners...');
+debugLog('Setting up shortcut listeners...');
 
 window.api.onNewTab(() => createNewAiTab());
 window.api.onCloseTab(() => { if (activeTabId) closeTab(activeTabId); });
@@ -705,27 +889,27 @@ window.api.onRefreshTopics(() => refreshAllTopics());
 window.api.onShowHeartbeatArchive(() => showHeartbeatArchiveDigestForActiveTab());
 window.api.onSwitchTab(({ index }) => switchToTabByIndex(index));
 window.api.onIncreaseFont(() => {
-  console.log('onIncreaseFont shortcut triggered');
+  debugLog('onIncreaseFont shortcut triggered');
   terminalManager.increaseFontSize();
 });
 window.api.onDecreaseFont(() => {
-  console.log('onDecreaseFont shortcut triggered');
+  debugLog('onDecreaseFont shortcut triggered');
   terminalManager.decreaseFontSize();
 });
 window.api.onResetFont(() => {
-  console.log('onResetFont shortcut triggered');
+  debugLog('onResetFont shortcut triggered');
   terminalManager.resetFontSize();
 });
 window.api.onPrevTab(() => {
-  console.log('onPrevTab shortcut triggered');
+  debugLog('onPrevTab shortcut triggered');
   switchToPrevTab();
 });
 window.api.onNextTab(() => {
-  console.log('onNextTab shortcut triggered');
+  debugLog('onNextTab shortcut triggered');
   switchToNextTab();
 });
 
-console.log('Shortcut listeners set up complete');
+debugLog('Shortcut listeners set up complete');
 
 // --- Button Listeners ---
 
@@ -735,9 +919,9 @@ btnSettings.addEventListener('click', () => openSettings());
 btnSettingsSave.addEventListener('click', () => saveSettings());
 btnSettingsCancel.addEventListener('click', () => closeSettings());
 btnScrollBottom.addEventListener('click', () => {
-  console.log('Scroll to bottom clicked');
+  debugLog('Scroll to bottom clicked');
   if (activeTabId) {
-    terminalManager.scrollToBottom(activeTabId);
+    terminalManager.ensureInputVisible(activeTabId);
     btnScrollBottom.classList.remove('visible');
   }
 });
@@ -746,23 +930,7 @@ settingsModal.addEventListener('click', (e) => {
   if (e.target === settingsModal) closeSettings();
 });
 
-// Auto-show scroll button when terminal has scrollback
-// Check periodically if terminal is scrolled up
-setInterval(() => {
-  if (activeTabId) {
-    const instance = terminalManager.instances.get(activeTabId);
-    if (instance && instance.terminal) {
-      const terminal = instance.terminal;
-      // Check if terminal is scrolled up (not at bottom)
-      const isAtBottom = terminal.buffer.active.viewportY === terminal.buffer.active.baseY;
-      if (!isAtBottom) {
-        btnScrollBottom.classList.add('visible');
-      } else {
-        btnScrollBottom.classList.remove('visible');
-      }
-    }
-  }
-}, 500); // Check every 500ms
+terminalManager.onScrollStateChange(handleTerminalScrollStateChange);
 
 // --- Init ---
 

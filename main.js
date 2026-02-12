@@ -8,12 +8,12 @@ let win;
 const terminals = new Map();
 const confirmAlertAt = new Map();
 const CONFIRM_ALERT_COOLDOWN_MS = 10000;
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 3 * 60 * 1000;
-const MIN_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 10 * 60 * 1000;
+const MIN_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
 const HEARTBEAT_MIN_CHARS = 80;
 const HEARTBEAT_CONTEXT_TAIL_CHARS = 2600;
-const HEARTBEAT_IDLE_GAP_MS = 12000;
+const HEARTBEAT_SIGNAL_DEBOUNCE_MS = 3000;
 const HEARTBEAT_NOTIFY_COOLDOWN_MS = 45000;
 const HEARTBEAT_ARCHIVE_RETENTION_DAYS = 30;
 const HEARTBEAT_MAX_QUERY_DAYS = 90;
@@ -171,6 +171,51 @@ function sanitizeArchiveLine(value, maxLength) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maxLength);
+}
+
+function canUseAsTerminalCwd(dirPath) {
+  const candidate = String(dirPath || '').trim();
+  if (!candidate) return false;
+  try {
+    const stat = fs.statSync(candidate);
+    if (!stat.isDirectory()) return false;
+    fs.accessSync(candidate, fs.constants.R_OK | fs.constants.X_OK);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function resolveTerminalCwd(requestedCwd) {
+  const requested = String(requestedCwd || '').trim();
+  if (requested && canUseAsTerminalCwd(requested)) {
+    return {
+      requestedCwd: requested,
+      resolvedCwd: requested,
+      fallbackApplied: false,
+      fallbackReason: ''
+    };
+  }
+
+  const fallbackCandidates = [process.env.HOME, app.getPath('home'), process.cwd()];
+  for (const candidate of fallbackCandidates) {
+    if (canUseAsTerminalCwd(candidate)) {
+      return {
+        requestedCwd: requested,
+        resolvedCwd: String(candidate),
+        fallbackApplied: !!requested,
+        fallbackReason: requested ? 'requested_cwd_unavailable' : 'empty_cwd'
+      };
+    }
+  }
+
+  const emergencyFallback = requested || String(process.env.HOME || process.cwd() || '/');
+  return {
+    requestedCwd: requested,
+    resolvedCwd: emergencyFallback,
+    fallbackApplied: !!requested,
+    fallbackReason: requested ? 'requested_cwd_unavailable' : 'fallback_unverified'
+  };
 }
 
 function getArchiveRootDir() {
@@ -542,7 +587,7 @@ async function runHeartbeat(tabId, entry, options = {}) {
 
   const now = Date.now();
   const lastActivityAt = Math.max(entry.lastOutputAt || 0, entry.lastUserInputAt || 0);
-  if (lastActivityAt > 0 && now - lastActivityAt < HEARTBEAT_IDLE_GAP_MS) return;
+  if (reason === 'signal' && lastActivityAt > 0 && now - lastActivityAt < HEARTBEAT_SIGNAL_DEBOUNCE_MS) return;
 
   const signature = createHeartbeatSignature(entry.buffer);
   const hasSignal = hasHeartbeatSignal(signature);
@@ -556,6 +601,7 @@ async function runHeartbeat(tabId, entry, options = {}) {
   try {
     const activityMark = entry.activitySeq;
     const report = await topicDetector.analyzeHeartbeat(signature);
+    const heartbeatStatus = inferHeartbeatStatusFromText(`${report.summary || ''}\n${report.analysis || ''}`);
 
     entry.lastHeartbeatSignature = signature;
     entry.lastHeartbeatActivitySeq = activityMark;
@@ -565,7 +611,8 @@ async function runHeartbeat(tabId, entry, options = {}) {
       summary: report.summary || '会话进行中',
       analysis: report.analysis || '请继续查看最新输出。',
       reason,
-      source: 'background'
+      source: 'background',
+      status: heartbeatStatus
     });
 
     if (win && !win.isDestroyed()) {
@@ -573,6 +620,7 @@ async function runHeartbeat(tabId, entry, options = {}) {
         tabId,
         summary: report.summary || '会话进行中',
         analysis: report.analysis || '请继续查看最新输出。',
+        status: heartbeatStatus,
         source: 'background',
         reason,
         at: new Date().toISOString()
@@ -608,7 +656,7 @@ function startHeartbeat(tabId, entry) {
   }, heartbeatRuntime.intervalMs);
 }
 
-function scheduleHeartbeatFromActivity(tabId, entry) {
+function scheduleHeartbeatFromSignal(tabId, entry) {
   if (!entry || !entry.alive) return;
   if (!heartbeatRuntime.enabled) return;
 
@@ -618,10 +666,10 @@ function scheduleHeartbeatFromActivity(tabId, entry) {
 
   entry.heartbeatDebounceTimer = setTimeout(() => {
     entry.heartbeatDebounceTimer = null;
-    runHeartbeat(tabId, entry, { reason: 'activity' }).catch((err) => {
-      console.warn(`[heartbeat] Debounced run failed for tab ${tabId}:`, err.message);
+    runHeartbeat(tabId, entry, { reason: 'signal' }).catch((err) => {
+      console.warn(`[heartbeat] Signal run failed for tab ${tabId}:`, err.message);
     });
-  }, HEARTBEAT_IDLE_GAP_MS);
+  }, HEARTBEAT_SIGNAL_DEBOUNCE_MS);
 }
 
 function restartAllHeartbeatTimers() {
@@ -643,7 +691,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       enableRemoteModule: false,
-      webSecurity: false  // Temporarily disable to test file drag-drop
+      webSecurity: true
     }
   });
 
@@ -716,7 +764,11 @@ ipcMain.handle('notify:info', async (event, { title, body }) => {
 
 ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
   const shell = process.env.SHELL || '/bin/zsh';
-  const resolvedCwd = cwd || process.env.HOME;
+  const cwdResolution = resolveTerminalCwd(cwd);
+  const resolvedCwd = cwdResolution.resolvedCwd;
+  if (cwdResolution.fallbackApplied) {
+    console.warn(`[terminal] CWD fallback for tab ${tabId}: requested="${cwdResolution.requestedCwd}" resolved="${resolvedCwd}"`);
+  }
   const ptyProcess = pty.spawn(shell, ['-l'], {
     name: 'xterm-256color',
     cols: 80,
@@ -750,7 +802,7 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
   startHeartbeat(tabId, entry);
   appendHeartbeatArchiveRecord(tabId, entry, 'session_start', {
     summary: '会话已启动',
-    analysis: `工作目录：${sanitizeArchiveLine(resolvedCwd, 160) || '默认目录'}`,
+    analysis: `工作目录：${sanitizeArchiveLine(resolvedCwd, 160) || '默认目录'}${cwdResolution.fallbackApplied ? '（已自动回退）' : ''}`,
     reason: entry.isAiSession ? 'ai_session' : 'terminal_session',
     source: 'system'
   });
@@ -769,7 +821,9 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     if (plain.trim()) {
       entry.activitySeq += 1;
       entry.lastOutputAt = Date.now();
-      scheduleHeartbeatFromActivity(tabId, entry);
+      if (hasHeartbeatSignal(plain)) {
+        scheduleHeartbeatFromSignal(tabId, entry);
+      }
     }
 
     if (shouldNotifyConfirmPrompt(tabId, plain) && win && !win.isDestroyed()) {
@@ -818,7 +872,13 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     }, 50);
   }
 
-  return { tabId };
+  return {
+    tabId,
+    resolvedCwd,
+    cwdFallbackApplied: cwdResolution.fallbackApplied,
+    cwdFallbackReason: cwdResolution.fallbackReason,
+    requestedCwd: cwdResolution.requestedCwd
+  };
 });
 
 ipcMain.on('terminal:data', (event, { tabId, data }) => {
@@ -827,7 +887,6 @@ ipcMain.on('terminal:data', (event, { tabId, data }) => {
     if ((data || '').trim()) {
       entry.activitySeq += 1;
       entry.lastUserInputAt = Date.now();
-      scheduleHeartbeatFromActivity(tabId, entry);
     }
     entry.pty.write(data);
   }

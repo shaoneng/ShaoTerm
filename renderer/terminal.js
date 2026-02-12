@@ -1,5 +1,21 @@
 /* global Terminal, FitAddon */
 
+const DEBUG_MODE_STORAGE_KEY = 'shaoterm.debug-mode.v1';
+const DEBUG_MODE = (() => {
+  try {
+    const search = new URLSearchParams(window.location.search || '');
+    if (search.get('debug') === '1') return true;
+    return window.localStorage.getItem(DEBUG_MODE_STORAGE_KEY) === '1';
+  } catch (err) {
+    return false;
+  }
+})();
+
+function debugLog(...args) {
+  if (!DEBUG_MODE) return;
+  console.log(...args);
+}
+
 const DARK_THEME = {
   background: '#23262c',
   foreground: '#d7dce4',
@@ -51,10 +67,11 @@ class TerminalManager {
     this.instances = new Map();
     this.isLight = false;
     this.fontSize = 14; // Default font size
+    this.scrollStateListeners = new Set();
   }
 
   create(tabId, containerElement) {
-    console.log(`Creating terminal for tab ${tabId}`);
+    debugLog(`Creating terminal for tab ${tabId}`);
 
     const surface = document.createElement('div');
     surface.className = 'terminal-surface';
@@ -62,6 +79,7 @@ class TerminalManager {
 
     const terminal = new Terminal({
       cursorBlink: true,
+      scrollOnUserInput: true,
       fontSize: this.fontSize,
       fontFamily: '"SF Mono", Menlo, Monaco, "Courier New", monospace',
       lineHeight: 1.24,
@@ -80,18 +98,27 @@ class TerminalManager {
       if (surface.offsetWidth > 0 && surface.offsetHeight > 0) {
         fitAddon.fit();
         window.api.resizeTerminal(tabId, terminal.cols, terminal.rows);
+        this.emitScrollState(tabId);
       }
     });
     observer.observe(surface);
 
+    const scrollSubscription = terminal.onScroll(() => {
+      this.emitScrollState(tabId);
+    });
+
     terminal.onData((data) => {
+      const distanceToBottom = terminal.buffer.active.baseY - terminal.buffer.active.viewportY;
+      if (distanceToBottom > 0) {
+        terminal.scrollToBottom();
+      }
       window.api.sendTerminalData(tabId, data);
     });
 
     // Handle Shift+Enter for newline (send same escape sequence as Option+Enter)
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type === 'keydown' && event.key === 'Enter' && event.shiftKey) {
-        console.log('Shift+Enter detected, sending ESC+Enter sequence');
+        debugLog('Shift+Enter detected, sending ESC+Enter sequence');
         // Send ESC + carriage return (same as Option+Enter in xterm.js)
         window.api.sendTerminalData(tabId, '\x1b\r');
         return false; // Prevent default behavior
@@ -99,29 +126,28 @@ class TerminalManager {
       return true;
     });
 
-    console.log('Shift+Enter handler attached');
+    debugLog('Shift+Enter handler attached');
 
     // Enable drag and drop for files/folders
     containerElement.addEventListener('dragover', (e) => {
-      console.log('Dragover event detected');
       e.preventDefault();
       e.stopPropagation();
     });
 
     containerElement.addEventListener('drop', (e) => {
-      console.log('Drop event detected');
+      debugLog('Drop event detected');
       e.preventDefault();
       e.stopPropagation();
 
       const files = e.dataTransfer.files;
-      console.log(`Dropped ${files.length} files`);
+      debugLog(`Dropped ${files.length} files`);
 
       if (files && files.length > 0) {
         const paths = [];
 
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
-          console.log(`File ${i}:`, file.name, file.path);
+          debugLog(`File ${i}:`, file.name, file.path);
 
           // Try to access path property directly
           const filePath = file.path || file.name;
@@ -131,15 +157,22 @@ class TerminalManager {
 
         if (paths.length > 0) {
           const pathString = paths.join(' ');
-          console.log(`Sending paths to terminal: ${pathString}`);
+          debugLog(`Sending paths to terminal: ${pathString}`);
           window.api.sendTerminalData(tabId, pathString);
         }
       }
     });
 
-    console.log('Drag and drop handlers attached');
+    debugLog('Drag and drop handlers attached');
 
-    this.instances.set(tabId, { terminal, fitAddon, container: containerElement, observer });
+    this.instances.set(tabId, {
+      terminal,
+      fitAddon,
+      container: containerElement,
+      observer,
+      scrollSubscription
+    });
+    this.emitScrollState(tabId);
 
     return { cols: terminal.cols, rows: terminal.rows };
   }
@@ -147,7 +180,9 @@ class TerminalManager {
   write(tabId, data) {
     const instance = this.instances.get(tabId);
     if (instance) {
-      instance.terminal.write(data);
+      instance.terminal.write(data, () => {
+        this.emitScrollState(tabId);
+      });
     }
   }
 
@@ -155,6 +190,7 @@ class TerminalManager {
     const instance = this.instances.get(tabId);
     if (instance) {
       instance.fitAddon.fit();
+      this.emitScrollState(tabId);
       return { cols: instance.terminal.cols, rows: instance.terminal.rows };
     }
     return null;
@@ -167,10 +203,56 @@ class TerminalManager {
     }
   }
 
+  getScrollDistance(tabId) {
+    const instance = this.instances.get(tabId);
+    if (!instance || !instance.terminal) return 0;
+    return instance.terminal.buffer.active.baseY - instance.terminal.buffer.active.viewportY;
+  }
+
+  onScrollStateChange(listener) {
+    if (typeof listener !== 'function') return () => {};
+    this.scrollStateListeners.add(listener);
+    return () => {
+      this.scrollStateListeners.delete(listener);
+    };
+  }
+
+  emitScrollState(tabId) {
+    if (this.scrollStateListeners.size === 0) return;
+    const instance = this.instances.get(tabId);
+    if (!instance || !instance.terminal) return;
+    const distanceToBottom = this.getScrollDistance(tabId);
+    const payload = {
+      tabId,
+      distanceToBottom,
+      isAtBottom: distanceToBottom <= 0
+    };
+    for (const listener of this.scrollStateListeners) {
+      listener(payload);
+    }
+  }
+
+  isNearBottom(tabId, thresholdLines = 0) {
+    const instance = this.instances.get(tabId);
+    if (!instance || !instance.terminal) return true;
+    const distance = instance.terminal.buffer.active.baseY - instance.terminal.buffer.active.viewportY;
+    return distance <= Math.max(0, Number(thresholdLines) || 0);
+  }
+
+  ensureInputVisible(tabId) {
+    const instance = this.instances.get(tabId);
+    if (instance) {
+      instance.terminal.scrollToBottom();
+      instance.terminal.focus();
+      this.emitScrollState(tabId);
+    }
+  }
+
   scrollToBottom(tabId) {
     const instance = this.instances.get(tabId);
     if (instance) {
       instance.terminal.scrollToBottom();
+      this.emitScrollState(tabId);
     }
   }
 
@@ -178,6 +260,9 @@ class TerminalManager {
     const instance = this.instances.get(tabId);
     if (instance) {
       instance.observer.disconnect();
+      if (instance.scrollSubscription && typeof instance.scrollSubscription.dispose === 'function') {
+        instance.scrollSubscription.dispose();
+      }
       instance.terminal.dispose();
       instance.container.remove();
       this.instances.delete(tabId);
@@ -193,9 +278,9 @@ class TerminalManager {
   }
 
   increaseFontSize() {
-    console.log(`Increasing font size from ${this.fontSize}`);
+    debugLog(`Increasing font size from ${this.fontSize}`);
     this.fontSize = Math.min(this.fontSize + 2, 32); // Max 32px
-    console.log(`New font size: ${this.fontSize}`);
+    debugLog(`New font size: ${this.fontSize}`);
     for (const [tabId, { terminal, fitAddon }] of this.instances) {
       terminal.options.fontSize = this.fontSize;
       // Refit after font size change
@@ -207,9 +292,9 @@ class TerminalManager {
   }
 
   decreaseFontSize() {
-    console.log(`Decreasing font size from ${this.fontSize}`);
+    debugLog(`Decreasing font size from ${this.fontSize}`);
     this.fontSize = Math.max(this.fontSize - 2, 8); // Min 8px
-    console.log(`New font size: ${this.fontSize}`);
+    debugLog(`New font size: ${this.fontSize}`);
     for (const [tabId, { terminal, fitAddon }] of this.instances) {
       terminal.options.fontSize = this.fontSize;
       // Refit after font size change
@@ -221,7 +306,7 @@ class TerminalManager {
   }
 
   resetFontSize() {
-    console.log(`Resetting font size from ${this.fontSize} to 14`);
+    debugLog(`Resetting font size from ${this.fontSize} to 14`);
     this.fontSize = 14; // Default size
     for (const [tabId, { terminal, fitAddon }] of this.instances) {
       terminal.options.fontSize = this.fontSize;
