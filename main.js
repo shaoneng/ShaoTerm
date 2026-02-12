@@ -691,7 +691,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       enableRemoteModule: false,
-      webSecurity: true
+      // Keep file:// local resource compatibility for packaged renderer assets.
+      webSecurity: false
     }
   });
 
@@ -766,16 +767,33 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
   const shell = process.env.SHELL || '/bin/zsh';
   const cwdResolution = resolveTerminalCwd(cwd);
   const resolvedCwd = cwdResolution.resolvedCwd;
+  const autoCommandPreview = String(autoCommand || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+
+  console.log(
+    `[terminal:create] tab=${tabId} shell=${shell} cwd="${resolvedCwd}"` +
+    (autoCommandPreview ? ` auto="${autoCommandPreview}"` : '')
+  );
   if (cwdResolution.fallbackApplied) {
     console.warn(`[terminal] CWD fallback for tab ${tabId}: requested="${cwdResolution.requestedCwd}" resolved="${resolvedCwd}"`);
   }
-  const ptyProcess = pty.spawn(shell, ['-l'], {
-    name: 'xterm-256color',
-    cols: 80,
-    rows: 24,
-    cwd: resolvedCwd,
-    env: { ...process.env, TERM: 'xterm-256color' }
-  });
+  let ptyProcess;
+  try {
+    ptyProcess = pty.spawn(shell, ['-l'], {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: resolvedCwd,
+      env: { ...process.env, TERM: 'xterm-256color' }
+    });
+    console.log(`[terminal:create] spawn ok tab=${tabId}`);
+  } catch (err) {
+    const reason = err && err.message ? err.message : 'unknown error';
+    console.warn(`[terminal:create] spawn failed tab=${tabId}: ${reason}`);
+    throw new Error(`Failed to spawn terminal shell (${shell}) in cwd (${resolvedCwd}): ${reason}`);
+  }
 
   const entry = {
     pty: ptyProcess,
