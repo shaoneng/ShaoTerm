@@ -53,6 +53,7 @@ jobs:
 
       - name: Build for macOS (x64)
         if: matrix.platform == 'mac' && matrix.arch == 'x64'
+        shell: bash
         run: |
           VERSION="${{ github.event.inputs.version }}"
           if [ -z "$VERSION" ]; then
@@ -62,6 +63,7 @@ jobs:
 
       - name: Build for macOS (arm64)
         if: matrix.platform == 'mac' && matrix.arch == 'arm64'
+        shell: bash
         run: |
           VERSION="${{ github.event.inputs.version }}"
           if [ -z "$VERSION" ]; then
@@ -71,6 +73,7 @@ jobs:
 
       - name: Build for Windows
         if: matrix.platform == 'win'
+        shell: bash
         run: |
           VERSION="${{ github.event.inputs.version }}"
           if [ -z "$VERSION" ]; then
