@@ -108,6 +108,7 @@ const quickHeartbeatInterval = document.getElementById('quick-heartbeat-interval
 let aiCommand = 'codex';
 const HEARTBEAT_INTERVAL_OPTIONS = ['5', '10', '15', '30'];
 const TERMINAL_BOTTOM_SNAP_LINES = 2;
+const TERMINAL_CREATE_TIMEOUT_MS = 12000;
 const HEARTBEAT_STATUS_TEXT = {
   unknown: '暂无心跳',
   running: '进行中',
@@ -264,6 +265,25 @@ function normalizeAiCommand(value) {
   return normalized || 'codex';
 }
 
+function withTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(message || '请求超时'));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function formatErrorDetail(err, fallback = '未知错误') {
+  if (err && err.message) {
+    return String(err.message).replace(/\s+/g, ' ').trim().slice(0, 220) || fallback;
+  }
+  return fallback;
+}
+
 function createTabSnapshot() {
   return {
     version: 1,
@@ -346,159 +366,174 @@ async function restoreTabsFromSnapshot() {
 }
 
 async function createNewTab(options = {}) {
-  const resolvedOptions = typeof options === 'string' ? { autoCommand: options } : (options || {});
-  const skipDirectoryPrompt = !!resolvedOptions.skipDirectoryPrompt;
-  const autoCommand = resolvedOptions.autoCommand ? normalizeAiCommand(resolvedOptions.autoCommand) : null;
-  const previousActiveTabId = activeTabId;
-  let cwd = resolvedOptions.cwd || null;
-  let dirName = resolvedOptions.title || '终端';
-
-  // Only show directory picker for AI tabs when not restoring.
-  if (autoCommand && !skipDirectoryPrompt) {
-    const result = await window.api.selectDirectory();
-    if (result.canceled) return null;
-    cwd = result.path;
-    dirName = cwd.split('/').pop() || cwd;
-  } else if (autoCommand && cwd && !resolvedOptions.title) {
-    dirName = cwd.split('/').pop() || cwd;
-  }
-
-  const tabId = generateTabId();
-  const tabData = {
-    id: tabId,
-    title: dirName,
-    manuallyRenamed: !!resolvedOptions.manuallyRenamed,
-    cwd,
-    autoCommand,
-    heartbeatStatus: 'unknown',
-    heartbeatSummary: '',
-    heartbeatAnalysis: '',
-    heartbeatAt: ''
-  };
-  tabs.push(tabData);
-
-  const tabEl = document.createElement('div');
-  tabEl.className = 'tab';
-  tabEl.dataset.tabId = tabId;
-
-  const heartbeatDot = document.createElement('span');
-  heartbeatDot.className = 'tab-heartbeat-dot status-unknown';
-  heartbeatDot.setAttribute('aria-hidden', 'true');
-
-  const titleSpan = document.createElement('span');
-  titleSpan.className = 'tab-title';
-  titleSpan.textContent = tabData.title;
-
-  const closeBtn = document.createElement('span');
-  closeBtn.className = 'tab-close';
-  closeBtn.textContent = '\u00d7';
-
-  tabEl.appendChild(heartbeatDot);
-  tabEl.appendChild(titleSpan);
-  tabEl.appendChild(closeBtn);
-  // Insert before both add buttons
-  tabBar.insertBefore(tabEl, btnAddTerminal);
-  renderTabHeartbeat(tabId);
-
-  tabEl.addEventListener('click', (e) => {
-    if (!e.target.classList.contains('tab-close')) {
-      switchToTabById(tabId);
-    }
-  });
-
-  titleSpan.addEventListener('dblclick', (e) => {
-    e.stopPropagation();
-    startRename(tabEl, tabData);
-  });
-
-  closeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeTab(tabId);
-  });
-
-  const wrapper = document.createElement('div');
-  wrapper.className = 'terminal-wrapper';
-  wrapper.dataset.tabId = tabId;
-  terminalContainer.appendChild(wrapper);
-
-  // Make visible before creating xterm
-  activeTabId = tabId;
-  tabBar.querySelectorAll('.tab').forEach((el) => {
-    el.classList.toggle('active', el.dataset.tabId === tabId);
-  });
-  terminalContainer.querySelectorAll('.terminal-wrapper').forEach((el) => {
-    el.classList.toggle('active', el.dataset.tabId === tabId);
-  });
-
-  let cols = 80;
-  let rows = 24;
   try {
-    const size = terminalManager.create(tabId, wrapper);
-    cols = size.cols;
-    rows = size.rows;
-  } catch (err) {
-    console.warn('Failed to initialize terminal view:', err);
-    const tabIndex = tabs.findIndex((t) => t.id === tabId);
-    if (tabIndex >= 0) tabs.splice(tabIndex, 1);
-    if (tabEl && tabEl.parentNode) tabEl.remove();
-    if (wrapper && wrapper.parentNode) wrapper.remove();
-    activeTabId = previousActiveTabId && tabs.some((t) => t.id === previousActiveTabId)
-      ? previousActiveTabId
-      : (tabs[0] ? tabs[0].id : null);
-    if (activeTabId) {
-      switchToTabById(activeTabId);
-    } else {
-      syncScrollBottomButton();
+    const resolvedOptions = typeof options === 'string' ? { autoCommand: options } : (options || {});
+    const skipDirectoryPrompt = !!resolvedOptions.skipDirectoryPrompt;
+    const autoCommand = resolvedOptions.autoCommand ? normalizeAiCommand(resolvedOptions.autoCommand) : null;
+    const previousActiveTabId = activeTabId;
+    let cwd = resolvedOptions.cwd || null;
+    let dirName = resolvedOptions.title || '终端';
+
+    // Only show directory picker for AI tabs when not restoring.
+    if (autoCommand && !skipDirectoryPrompt) {
+      const result = await window.api.selectDirectory();
+      if (result.canceled) return null;
+      cwd = result.path;
+      dirName = cwd.split('/').pop() || cwd;
+    } else if (autoCommand && cwd && !resolvedOptions.title) {
+      dirName = cwd.split('/').pop() || cwd;
     }
-    showInAppNotice('终端加载失败', '终端渲染组件加载失败，请重启应用后重试。');
+
+    const tabId = generateTabId();
+    const tabData = {
+      id: tabId,
+      title: dirName,
+      manuallyRenamed: !!resolvedOptions.manuallyRenamed,
+      cwd,
+      autoCommand,
+      heartbeatStatus: 'unknown',
+      heartbeatSummary: '',
+      heartbeatAnalysis: '',
+      heartbeatAt: ''
+    };
+    tabs.push(tabData);
+
+    const tabEl = document.createElement('div');
+    tabEl.className = 'tab';
+    tabEl.dataset.tabId = tabId;
+
+    const heartbeatDot = document.createElement('span');
+    heartbeatDot.className = 'tab-heartbeat-dot status-unknown';
+    heartbeatDot.setAttribute('aria-hidden', 'true');
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'tab-title';
+    titleSpan.textContent = tabData.title;
+
+    const closeBtn = document.createElement('span');
+    closeBtn.className = 'tab-close';
+    closeBtn.textContent = '\u00d7';
+
+    tabEl.appendChild(heartbeatDot);
+    tabEl.appendChild(titleSpan);
+    tabEl.appendChild(closeBtn);
+    // Insert before both add buttons
+    tabBar.insertBefore(tabEl, btnAddTerminal);
+    renderTabHeartbeat(tabId);
+
+    tabEl.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('tab-close')) {
+        switchToTabById(tabId);
+      }
+    });
+
+    titleSpan.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      startRename(tabEl, tabData);
+    });
+
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTab(tabId).catch((closeErr) => {
+        console.warn('Failed to close tab:', closeErr);
+        showInAppNotice('关闭标签失败', `原因：${formatErrorDetail(closeErr)}`);
+      });
+    });
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'terminal-wrapper';
+    wrapper.dataset.tabId = tabId;
+    terminalContainer.appendChild(wrapper);
+
+    // Make visible before creating xterm
+    activeTabId = tabId;
+    tabBar.querySelectorAll('.tab').forEach((el) => {
+      el.classList.toggle('active', el.dataset.tabId === tabId);
+    });
+    terminalContainer.querySelectorAll('.terminal-wrapper').forEach((el) => {
+      el.classList.toggle('active', el.dataset.tabId === tabId);
+    });
+
+    let cols = 80;
+    let rows = 24;
+    try {
+      const size = terminalManager.create(tabId, wrapper);
+      cols = size.cols;
+      rows = size.rows;
+    } catch (err) {
+      console.warn('Failed to initialize terminal view:', err);
+      const tabIndex = tabs.findIndex((t) => t.id === tabId);
+      if (tabIndex >= 0) tabs.splice(tabIndex, 1);
+      if (tabEl && tabEl.parentNode) tabEl.remove();
+      if (wrapper && wrapper.parentNode) wrapper.remove();
+      activeTabId = previousActiveTabId && tabs.some((t) => t.id === previousActiveTabId)
+        ? previousActiveTabId
+        : (tabs[0] ? tabs[0].id : null);
+      if (activeTabId) {
+        switchToTabById(activeTabId);
+      } else {
+        syncScrollBottomButton();
+      }
+      showInAppNotice('终端加载失败', '终端渲染组件加载失败，请重启应用后重试。');
+      return null;
+    }
+
+    let createResult = null;
+    try {
+      createResult = await withTimeout(
+        window.api.createTerminal(tabId, cwd, autoCommand || null),
+        TERMINAL_CREATE_TIMEOUT_MS,
+        `终端创建超时（>${Math.round(TERMINAL_CREATE_TIMEOUT_MS / 1000)} 秒）`
+      );
+    } catch (err) {
+      console.warn('Failed to create terminal session:', err);
+      terminalManager.destroy(tabId);
+      window.api.closeTerminal(tabId).catch((closeErr) => {
+        console.warn('Failed to cleanup timed-out/failed terminal session:', closeErr);
+      });
+      const tabIndex = tabs.findIndex((t) => t.id === tabId);
+      if (tabIndex >= 0) tabs.splice(tabIndex, 1);
+      const staleTabEl = tabBar.querySelector(`.tab[data-tab-id="${tabId}"]`);
+      if (staleTabEl) staleTabEl.remove();
+      activeTabId = previousActiveTabId && tabs.some((t) => t.id === previousActiveTabId)
+        ? previousActiveTabId
+        : (tabs[0] ? tabs[0].id : null);
+      if (activeTabId) {
+        switchToTabById(activeTabId);
+      } else {
+        syncScrollBottomButton();
+      }
+      showInAppNotice('会话创建失败', `无法创建终端会话：${formatErrorDetail(err)}`);
+      return null;
+    }
+
+    if (createResult && createResult.resolvedCwd) {
+      tabData.cwd = createResult.resolvedCwd;
+    }
+    if (createResult && createResult.cwdFallbackApplied) {
+      const requestedPath = String(createResult.requestedCwd || '').trim();
+      const fallbackPath = String(createResult.resolvedCwd || '').trim();
+      const fallbackMessage = requestedPath
+        ? `目录不可用，已自动切换到：${fallbackPath}`
+        : `未提供目录，已使用默认目录：${fallbackPath}`;
+      showInAppNotice('目录已自动回退', fallbackMessage);
+    }
+    updateTabHeartbeatMeta(tabId, {
+      status: 'running',
+      summary: '会话已启动',
+      analysis: tabData.cwd ? `工作目录：${tabData.cwd}` : '',
+      at: new Date().toISOString()
+    });
+    window.api.resizeTerminal(tabId, cols, rows);
+    terminalManager.focus(tabId);
+    syncScrollBottomButton();
+    persistTabSnapshot();
+    return tabId;
+  } catch (err) {
+    console.warn('Unexpected error while creating tab:', err);
+    showInAppNotice('新建标签失败', `原因：${formatErrorDetail(err)}`);
     return null;
   }
-  let createResult = null;
-  try {
-    createResult = await window.api.createTerminal(tabId, cwd, autoCommand || null);
-  } catch (err) {
-    console.warn('Failed to create terminal session:', err);
-    terminalManager.destroy(tabId);
-    const tabIndex = tabs.findIndex((t) => t.id === tabId);
-    if (tabIndex >= 0) tabs.splice(tabIndex, 1);
-    const staleTabEl = tabBar.querySelector(`.tab[data-tab-id="${tabId}"]`);
-    if (staleTabEl) staleTabEl.remove();
-    activeTabId = previousActiveTabId && tabs.some((t) => t.id === previousActiveTabId)
-      ? previousActiveTabId
-      : (tabs[0] ? tabs[0].id : null);
-    if (activeTabId) {
-      switchToTabById(activeTabId);
-    } else {
-      syncScrollBottomButton();
-    }
-    const detail = err && err.message
-      ? String(err.message).replace(/\s+/g, ' ').trim().slice(0, 220)
-      : '未知错误';
-    showInAppNotice('会话创建失败', `无法创建终端会话：${detail}`);
-    return null;
-  }
-  if (createResult && createResult.resolvedCwd) {
-    tabData.cwd = createResult.resolvedCwd;
-  }
-  if (createResult && createResult.cwdFallbackApplied) {
-    const requestedPath = String(createResult.requestedCwd || '').trim();
-    const fallbackPath = String(createResult.resolvedCwd || '').trim();
-    const fallbackMessage = requestedPath
-      ? `目录不可用，已自动切换到：${fallbackPath}`
-      : `未提供目录，已使用默认目录：${fallbackPath}`;
-    showInAppNotice('目录已自动回退', fallbackMessage);
-  }
-  updateTabHeartbeatMeta(tabId, {
-    status: 'running',
-    summary: '会话已启动',
-    analysis: tabData.cwd ? `工作目录：${tabData.cwd}` : '',
-    at: new Date().toISOString()
-  });
-  window.api.resizeTerminal(tabId, cols, rows);
-  terminalManager.focus(tabId);
-  syncScrollBottomButton();
-  persistTabSnapshot();
-  return tabId;
 }
 
 async function createNewAiTab() {
@@ -790,6 +825,32 @@ function showInAppNotice(title, message) {
   }, 5200);
 }
 
+function reportAsyncFailure(title, err, fallbackMessage) {
+  console.warn(`${title}:`, err);
+  const message = fallbackMessage || `原因：${formatErrorDetail(err)}`;
+  showInAppNotice(title, message);
+}
+
+function runAsyncSafely(action, title, fallbackMessage) {
+  return (...args) => {
+    Promise.resolve()
+      .then(() => action(...args))
+      .catch((err) => reportAsyncFailure(title, err, fallbackMessage));
+  };
+}
+
+function registerGlobalRuntimeNoticeHandlers() {
+  if (window.__shaotermGlobalRuntimeNoticeHandlersInstalled) return;
+  window.__shaotermGlobalRuntimeNoticeHandlersInstalled = true;
+
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event && event.reason ? event.reason : new Error('未知异步异常');
+    reportAsyncFailure('运行异常', reason, '发生未处理的异步错误，请重试刚才的操作。');
+  });
+}
+
+registerGlobalRuntimeNoticeHandlers();
+
 async function showNonBlockingNotice(title, message) {
   try {
     const result = await window.api.notifyInfo(title, message);
@@ -908,10 +969,27 @@ window.api.onFileDrop(({ paths }) => {
 
 debugLog('Setting up shortcut listeners...');
 
-window.api.onNewTab(() => createNewAiTab());
-window.api.onCloseTab(() => { if (activeTabId) closeTab(activeTabId); });
-window.api.onRefreshTopics(() => refreshAllTopics());
-window.api.onShowHeartbeatArchive(() => showHeartbeatArchiveDigestForActiveTab());
+window.api.onNewTab(runAsyncSafely(
+  () => createNewAiTab(),
+  '新建会话失败'
+));
+window.api.onCloseTab(runAsyncSafely(
+  () => {
+    if (activeTabId) {
+      return closeTab(activeTabId);
+    }
+    return null;
+  },
+  '关闭会话失败'
+));
+window.api.onRefreshTopics(runAsyncSafely(
+  () => refreshAllTopics(),
+  '刷新会话分析失败'
+));
+window.api.onShowHeartbeatArchive(runAsyncSafely(
+  () => showHeartbeatArchiveDigestForActiveTab(),
+  '提取心跳归档失败'
+));
 window.api.onSwitchTab(({ index }) => switchToTabByIndex(index));
 window.api.onIncreaseFont(() => {
   debugLog('onIncreaseFont shortcut triggered');
@@ -938,10 +1016,22 @@ debugLog('Shortcut listeners set up complete');
 
 // --- Button Listeners ---
 
-btnAddTerminal.addEventListener('click', () => createNewTab());
-btnAddAi.addEventListener('click', () => createNewAiTab());
-btnSettings.addEventListener('click', () => openSettings());
-btnSettingsSave.addEventListener('click', () => saveSettings());
+btnAddTerminal.addEventListener('click', runAsyncSafely(
+  () => createNewTab(),
+  '新建标签失败'
+));
+btnAddAi.addEventListener('click', runAsyncSafely(
+  () => createNewAiTab(),
+  '新建 AI 会话失败'
+));
+btnSettings.addEventListener('click', runAsyncSafely(
+  () => openSettings(),
+  '打开设置失败'
+));
+btnSettingsSave.addEventListener('click', runAsyncSafely(
+  () => saveSettings(),
+  '保存设置失败'
+));
 btnSettingsCancel.addEventListener('click', () => closeSettings());
 btnScrollBottom.addEventListener('click', () => {
   debugLog('Scroll to bottom clicked');
@@ -978,4 +1068,6 @@ async function bootstrapApp() {
   }
 }
 
-bootstrapApp();
+bootstrapApp().catch((err) => {
+  reportAsyncFailure('应用初始化失败', err, '初始化会话时出现异常，请尝试手动新建标签。');
+});

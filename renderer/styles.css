@@ -608,7 +608,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
-  z-index: 3000;
+  z-index: 12000;
   pointer-events: none;
 }
 
