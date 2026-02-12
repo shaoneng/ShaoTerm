@@ -16,6 +16,25 @@ function debugLog(...args) {
   console.log(...args);
 }
 
+const missingApiWarningSet = new Set();
+
+function callApiSafely(methodName, ...args) {
+  if (window.api && typeof window.api[methodName] === 'function') {
+    try {
+      return window.api[methodName](...args);
+    } catch (err) {
+      console.warn(`[terminal][api] Failed to call ${methodName}:`, err);
+      return undefined;
+    }
+  }
+
+  if (!missingApiWarningSet.has(methodName)) {
+    missingApiWarningSet.add(methodName);
+    console.warn(`[terminal][api] Missing bridge method: ${methodName}`);
+  }
+  return undefined;
+}
+
 const DARK_THEME = {
   background: '#23262c',
   foreground: '#d7dce4',
@@ -97,7 +116,7 @@ class TerminalManager {
     const observer = new ResizeObserver(() => {
       if (surface.offsetWidth > 0 && surface.offsetHeight > 0) {
         fitAddon.fit();
-        window.api.resizeTerminal(tabId, terminal.cols, terminal.rows);
+        callApiSafely('resizeTerminal', tabId, terminal.cols, terminal.rows);
         this.emitScrollState(tabId);
       }
     });
@@ -112,7 +131,7 @@ class TerminalManager {
       if (distanceToBottom > 0) {
         terminal.scrollToBottom();
       }
-      window.api.sendTerminalData(tabId, data);
+      callApiSafely('sendTerminalData', tabId, data);
     });
 
     // Handle Shift+Enter for newline (send same escape sequence as Option+Enter)
@@ -120,7 +139,7 @@ class TerminalManager {
       if (event.type === 'keydown' && event.key === 'Enter' && event.shiftKey) {
         debugLog('Shift+Enter detected, sending ESC+Enter sequence');
         // Send ESC + carriage return (same as Option+Enter in xterm.js)
-        window.api.sendTerminalData(tabId, '\x1b\r');
+        callApiSafely('sendTerminalData', tabId, '\x1b\r');
         return false; // Prevent default behavior
       }
       return true;
@@ -158,7 +177,7 @@ class TerminalManager {
         if (paths.length > 0) {
           const pathString = paths.join(' ');
           debugLog(`Sending paths to terminal: ${pathString}`);
-          window.api.sendTerminalData(tabId, pathString);
+          callApiSafely('sendTerminalData', tabId, pathString);
         }
       }
     });
@@ -286,7 +305,7 @@ class TerminalManager {
       // Refit after font size change
       setTimeout(() => {
         fitAddon.fit();
-        window.api.resizeTerminal(tabId, terminal.cols, terminal.rows);
+        callApiSafely('resizeTerminal', tabId, terminal.cols, terminal.rows);
       }, 10);
     }
   }
@@ -300,7 +319,7 @@ class TerminalManager {
       // Refit after font size change
       setTimeout(() => {
         fitAddon.fit();
-        window.api.resizeTerminal(tabId, terminal.cols, terminal.rows);
+        callApiSafely('resizeTerminal', tabId, terminal.cols, terminal.rows);
       }, 10);
     }
   }
@@ -313,7 +332,7 @@ class TerminalManager {
       // Refit after font size change
       setTimeout(() => {
         fitAddon.fit();
-        window.api.resizeTerminal(tabId, terminal.cols, terminal.rows);
+        callApiSafely('resizeTerminal', tabId, terminal.cols, terminal.rows);
       }, 10);
     }
   }

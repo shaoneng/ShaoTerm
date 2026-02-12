@@ -284,6 +284,24 @@ function formatErrorDetail(err, fallback = '未知错误') {
   return fallback;
 }
 
+function hasApiMethod(methodName) {
+  return !!(window.api && typeof window.api[methodName] === 'function');
+}
+
+function registerApiListener(methodName, callback) {
+  if (!hasApiMethod(methodName)) {
+    console.warn(`[api] Missing listener bridge: ${methodName}`);
+    return false;
+  }
+  try {
+    window.api[methodName](callback);
+    return true;
+  } catch (err) {
+    console.warn(`[api] Failed to register listener bridge: ${methodName}`, err);
+    return false;
+  }
+}
+
 function createTabSnapshot() {
   return {
     version: 1,
@@ -825,6 +843,26 @@ function showInAppNotice(title, message) {
   }, 5200);
 }
 
+function validateApiBridge() {
+  const requiredMethods = [
+    'createTerminal',
+    'sendTerminalData',
+    'resizeTerminal',
+    'closeTerminal',
+    'getSettings',
+    'saveSettings'
+  ];
+  const missing = requiredMethods.filter((methodName) => !hasApiMethod(methodName));
+  if (missing.length === 0) return;
+
+  const preview = missing.slice(0, 4).join(', ');
+  const suffix = missing.length > 4 ? ` 等 ${missing.length} 项` : '';
+  showInAppNotice(
+    '运行环境异常',
+    `应用桥接接口缺失（${preview}${suffix}），请重新安装最新版本。`
+  );
+}
+
 function reportAsyncFailure(title, err, fallbackMessage) {
   console.warn(`${title}:`, err);
   const message = fallbackMessage || `原因：${formatErrorDetail(err)}`;
@@ -898,11 +936,11 @@ async function showHeartbeatArchiveDigestForActiveTab() {
 
 // --- IPC Listeners ---
 
-window.api.onTerminalOutput(({ tabId, data }) => {
+registerApiListener('onTerminalOutput', ({ tabId, data }) => {
   terminalManager.write(tabId, data);
 });
 
-window.api.onTerminalClosed(({ tabId }) => {
+registerApiListener('onTerminalClosed', ({ tabId }) => {
   const tabData = tabs.find((t) => t.id === tabId);
   if (tabData) {
     updateTabHeartbeatMeta(tabId, {
@@ -915,7 +953,7 @@ window.api.onTerminalClosed(({ tabId }) => {
   }
 });
 
-window.api.onTerminalHeartbeatSummary(({ tabId, summary, analysis, status, at }) => {
+registerApiListener('onTerminalHeartbeatSummary', ({ tabId, summary, analysis, status, at }) => {
   const tabData = tabs.find((t) => t.id === tabId);
   const tabTitle = tabData && tabData.title ? tabData.title : '当前会话';
   const compactSummary = (summary || '会话进行中').replace(/\s+/g, ' ').trim();
@@ -929,7 +967,7 @@ window.api.onTerminalHeartbeatSummary(({ tabId, summary, analysis, status, at })
   debugLog(`[heartbeat][silent] ${tabTitle}: ${compactSummary}${compactAnalysis ? ` | ${compactAnalysis}` : ''}`);
 });
 
-window.api.onTerminalConfirmNeeded(({ tabId, prompt }) => {
+registerApiListener('onTerminalConfirmNeeded', ({ tabId, prompt }) => {
   const tabData = tabs.find((t) => t.id === tabId);
   if (!tabData) return;
 
@@ -947,7 +985,7 @@ window.api.onTerminalConfirmNeeded(({ tabId, prompt }) => {
   showNonBlockingNotice('需要确认', message);
 });
 
-window.api.onTopicStatus(({ tabId, status, topic }) => {
+registerApiListener('onTopicStatus', ({ tabId, status, topic }) => {
   const tabData = tabs.find((t) => t.id === tabId);
   if (tabData && !tabData.manuallyRenamed) {
     updateTabTitle(tabId, topic, false);
@@ -955,7 +993,7 @@ window.api.onTopicStatus(({ tabId, status, topic }) => {
 });
 
 // Handle file drops from main process
-window.api.onFileDrop(({ paths }) => {
+registerApiListener('onFileDrop', ({ paths }) => {
   debugLog('File drop from main process:', paths);
   if (activeTabId && paths && paths.length > 0) {
     const quotedPaths = paths.map(p => p.includes(' ') ? `"${p}"` : p);
@@ -969,11 +1007,11 @@ window.api.onFileDrop(({ paths }) => {
 
 debugLog('Setting up shortcut listeners...');
 
-window.api.onNewTab(runAsyncSafely(
+registerApiListener('onNewTab', runAsyncSafely(
   () => createNewAiTab(),
   '新建会话失败'
 ));
-window.api.onCloseTab(runAsyncSafely(
+registerApiListener('onCloseTab', runAsyncSafely(
   () => {
     if (activeTabId) {
       return closeTab(activeTabId);
@@ -982,32 +1020,32 @@ window.api.onCloseTab(runAsyncSafely(
   },
   '关闭会话失败'
 ));
-window.api.onRefreshTopics(runAsyncSafely(
+registerApiListener('onRefreshTopics', runAsyncSafely(
   () => refreshAllTopics(),
   '刷新会话分析失败'
 ));
-window.api.onShowHeartbeatArchive(runAsyncSafely(
+registerApiListener('onShowHeartbeatArchive', runAsyncSafely(
   () => showHeartbeatArchiveDigestForActiveTab(),
   '提取心跳归档失败'
 ));
-window.api.onSwitchTab(({ index }) => switchToTabByIndex(index));
-window.api.onIncreaseFont(() => {
+registerApiListener('onSwitchTab', ({ index }) => switchToTabByIndex(index));
+registerApiListener('onIncreaseFont', () => {
   debugLog('onIncreaseFont shortcut triggered');
   terminalManager.increaseFontSize();
 });
-window.api.onDecreaseFont(() => {
+registerApiListener('onDecreaseFont', () => {
   debugLog('onDecreaseFont shortcut triggered');
   terminalManager.decreaseFontSize();
 });
-window.api.onResetFont(() => {
+registerApiListener('onResetFont', () => {
   debugLog('onResetFont shortcut triggered');
   terminalManager.resetFontSize();
 });
-window.api.onPrevTab(() => {
+registerApiListener('onPrevTab', () => {
   debugLog('onPrevTab shortcut triggered');
   switchToPrevTab();
 });
-window.api.onNextTab(() => {
+registerApiListener('onNextTab', () => {
   debugLog('onNextTab shortcut triggered');
   switchToNextTab();
 });
@@ -1052,6 +1090,7 @@ terminalManager.onScrollStateChange(handleTerminalScrollStateChange);
 // Initialize theme based on system preference
 initTheme();
 initializeQuickSettings();
+validateApiBridge();
 window.addEventListener('beforeunload', persistTabSnapshot);
 
 async function bootstrapApp() {
