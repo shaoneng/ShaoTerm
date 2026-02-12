@@ -208,9 +208,27 @@ function switchToNextTab() {
   switchToTabById(tabs[nextIndex].id);
 }
 
+async function confirmCloseTab(tabData) {
+  const tabTitle = tabData && tabData.title ? tabData.title : '当前标签页';
+  const message = `确定要关闭“${tabTitle}”吗？`;
+  const detail = '关闭后此会话将终止，无法恢复。';
+
+  try {
+    const result = await window.api.confirmDialog('关闭标签页', message, detail);
+    return !!(result && result.confirmed);
+  } catch (err) {
+    console.warn('Failed to show native confirm dialog, fallback to window.confirm:', err);
+    return window.confirm(`${message}\n${detail}`);
+  }
+}
+
 async function closeTab(tabId) {
   const index = tabs.findIndex((t) => t.id === tabId);
   if (index === -1) return;
+
+  const tabData = tabs[index];
+  const shouldClose = await confirmCloseTab(tabData);
+  if (!shouldClose) return;
 
   if (tabs.length === 1) {
     await createNewTab();

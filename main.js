@@ -55,6 +55,21 @@ ipcMain.handle('dialog:select-directory', async () => {
   return { canceled: false, path: result.filePaths[0] };
 });
 
+ipcMain.handle('dialog:confirm', async (event, { title, message, detail }) => {
+  const result = await dialog.showMessageBox(win, {
+    type: 'question',
+    title: title || '请确认',
+    message: message || '请确认操作',
+    detail: detail || '',
+    buttons: ['取消', '确认'],
+    defaultId: 1,
+    cancelId: 0,
+    noLink: true
+  });
+
+  return { confirmed: result.response === 1 };
+});
+
 // --- IPC: Terminal management ---
 
 ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
