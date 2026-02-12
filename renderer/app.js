@@ -430,7 +430,29 @@ async function createNewTab(options = {}) {
     el.classList.toggle('active', el.dataset.tabId === tabId);
   });
 
-  const { cols, rows } = terminalManager.create(tabId, wrapper);
+  let cols = 80;
+  let rows = 24;
+  try {
+    const size = terminalManager.create(tabId, wrapper);
+    cols = size.cols;
+    rows = size.rows;
+  } catch (err) {
+    console.warn('Failed to initialize terminal view:', err);
+    const tabIndex = tabs.findIndex((t) => t.id === tabId);
+    if (tabIndex >= 0) tabs.splice(tabIndex, 1);
+    if (tabEl && tabEl.parentNode) tabEl.remove();
+    if (wrapper && wrapper.parentNode) wrapper.remove();
+    activeTabId = previousActiveTabId && tabs.some((t) => t.id === previousActiveTabId)
+      ? previousActiveTabId
+      : (tabs[0] ? tabs[0].id : null);
+    if (activeTabId) {
+      switchToTabById(activeTabId);
+    } else {
+      syncScrollBottomButton();
+    }
+    showInAppNotice('终端加载失败', '终端渲染组件加载失败，请重启应用后重试。');
+    return null;
+  }
   let createResult = null;
   try {
     createResult = await window.api.createTerminal(tabId, cwd, autoCommand || null);
@@ -477,7 +499,7 @@ async function createNewTab(options = {}) {
 }
 
 async function createNewAiTab() {
-  await createNewTab({ autoCommand: aiCommand });
+  return createNewTab({ autoCommand: aiCommand });
 }
 
 function switchToTabById(tabId) {
@@ -943,7 +965,13 @@ async function bootstrapApp() {
   await loadRuntimeSettings();
   const restored = await restoreTabsFromSnapshot();
   if (!restored) {
-    await createNewAiTab();
+    const aiTabId = await createNewAiTab();
+    if (!aiTabId) {
+      const terminalTabId = await createNewTab();
+      if (!terminalTabId) {
+        showInAppNotice('会话初始化失败', '请点击“+”或“AI+”重新创建会话。');
+      }
+    }
   }
 }
 
