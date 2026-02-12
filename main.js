@@ -8,6 +8,9 @@ let win;
 const terminals = new Map();
 const confirmAlertAt = new Map();
 const CONFIRM_ALERT_COOLDOWN_MS = 10000;
+const HEARTBEAT_INTERVAL_MS = 3 * 60 * 1000;
+const HEARTBEAT_MIN_CHARS = 120;
+const HEARTBEAT_CONTEXT_TAIL_CHARS = 2600;
 
 function toUnpackedPath(filePath) {
   return filePath
@@ -109,6 +112,55 @@ function shouldNotifyConfirmPrompt(tabId, plainText) {
   return true;
 }
 
+function createHeartbeatSignature(rawBuffer) {
+  return stripAnsiForDetection(rawBuffer || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(-HEARTBEAT_CONTEXT_TAIL_CHARS);
+}
+
+async function runHeartbeat(tabId, entry) {
+  if (!entry || !entry.alive || entry.heartbeatInFlight) return;
+
+  const signature = createHeartbeatSignature(entry.buffer);
+  if (signature.length < HEARTBEAT_MIN_CHARS) return;
+  if (signature === entry.lastHeartbeatSignature) return;
+
+  entry.heartbeatInFlight = true;
+  try {
+    const report = await topicDetector.analyzeHeartbeat(signature);
+    entry.lastHeartbeatSignature = signature;
+
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('terminal:heartbeat-summary', {
+        tabId,
+        summary: report.summary || '会话进行中',
+        analysis: report.analysis || '请继续查看最新输出。',
+        at: new Date().toISOString()
+      });
+    }
+  } catch (err) {
+    console.warn(`[heartbeat] Failed for tab ${tabId}:`, err.message);
+  } finally {
+    entry.heartbeatInFlight = false;
+  }
+}
+
+function stopHeartbeat(entry) {
+  if (!entry || !entry.heartbeatTimer) return;
+  clearInterval(entry.heartbeatTimer);
+  entry.heartbeatTimer = null;
+}
+
+function startHeartbeat(tabId, entry) {
+  stopHeartbeat(entry);
+  entry.heartbeatTimer = setInterval(() => {
+    runHeartbeat(tabId, entry).catch((err) => {
+      console.warn(`[heartbeat] Unexpected error for tab ${tabId}:`, err.message);
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1200,
@@ -203,8 +255,16 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     env: { ...process.env, TERM: 'xterm-256color' }
   });
 
-  const entry = { pty: ptyProcess, buffer: '', alive: true };
+  const entry = {
+    pty: ptyProcess,
+    buffer: '',
+    alive: true,
+    heartbeatInFlight: false,
+    heartbeatTimer: null,
+    lastHeartbeatSignature: ''
+  };
   terminals.set(tabId, entry);
+  startHeartbeat(tabId, entry);
 
   ptyProcess.onData((data) => {
     if (win && !win.isDestroyed()) {
@@ -227,6 +287,7 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
 
   ptyProcess.onExit(({ exitCode }) => {
     entry.alive = false;
+    stopHeartbeat(entry);
     if (win && !win.isDestroyed()) {
       win.webContents.send('terminal:closed', { tabId, exitCode });
     }
@@ -274,6 +335,7 @@ ipcMain.on('terminal:resize', (event, { tabId, cols, rows }) => {
 ipcMain.handle('terminal:close', (event, { tabId }) => {
   const entry = terminals.get(tabId);
   if (entry) {
+    stopHeartbeat(entry);
     if (entry.alive) {
       entry.pty.kill();
     }

@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('api', {
   onTerminalClosed: (callback) => {
     ipcRenderer.on('terminal:closed', (event, payload) => callback(payload));
   },
+  onTerminalHeartbeatSummary: (callback) => {
+    ipcRenderer.on('terminal:heartbeat-summary', (event, payload) => callback(payload));
+  },
   onTerminalConfirmNeeded: (callback) => {
     ipcRenderer.on('terminal:confirm-needed', (event, payload) => callback(payload));
   },

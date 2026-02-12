@@ -494,6 +494,18 @@ window.api.onTerminalClosed(({ tabId }) => {
   }
 });
 
+window.api.onTerminalHeartbeatSummary(({ tabId, summary, analysis }) => {
+  const tabData = tabs.find((t) => t.id === tabId);
+  const tabTitle = tabData && tabData.title ? tabData.title : '当前会话';
+  const compactSummary = (summary || '会话进行中').replace(/\s+/g, ' ').trim();
+  const compactAnalysis = (analysis || '').replace(/\s+/g, ' ').trim();
+  const message = compactAnalysis
+    ? `${compactSummary}\n${compactAnalysis}`
+    : compactSummary;
+
+  showNonBlockingNotice(`心跳总结 · ${tabTitle}`, message);
+});
+
 window.api.onTerminalConfirmNeeded(({ tabId, prompt }) => {
   const tabData = tabs.find((t) => t.id === tabId);
   if (!tabData) return;
