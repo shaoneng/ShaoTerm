@@ -10,6 +10,9 @@ const CONFIRM_ALERT_COOLDOWN_MS = 10000;
 
 const CONFIRM_PROMPT_PATTERNS = [
   /\b(y\/n|yes\/no|y\/N|Y\/n)\b/,
+  /(?:^|\s)\d+\.\s*yes,\s*proceed\s*\(y\)/i,
+  /\byes,\s*proceed\s*\(y\)/i,
+  /\bproceed\s*\(y\)/i,
   /are you sure/i,
   /do you want to continue/i,
   /\bproceed\?/i,
