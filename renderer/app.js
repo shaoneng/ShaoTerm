@@ -82,7 +82,15 @@ const settingsBaseUrl = document.getElementById('settings-base-url');
 const settingsApiKey = document.getElementById('settings-api-key');
 const btnSettingsSave = document.getElementById('btn-settings-save');
 const btnSettingsCancel = document.getElementById('btn-settings-cancel');
+const composerInput = document.getElementById('composer-input');
+const composerAttach = document.getElementById('composer-attach');
+const composerModel = document.getElementById('composer-model');
+const composerEffort = document.getElementById('composer-effort');
 let aiCommand = 'codex';
+const composerModels = ['GPT-5.3-Codex', 'GPT-5-Codex', 'GPT-4.1'];
+const composerEfforts = ['Extra High', 'High', 'Medium'];
+let composerModelIndex = 0;
+let composerEffortIndex = 0;
 
 // --- Tab Management ---
 
@@ -359,6 +367,67 @@ async function saveSettings() {
   closeSettings();
 }
 
+function setComposerChipText(chipButton, text) {
+  if (!chipButton) return;
+  const label = chipButton.querySelector('.composer-chip-label');
+  if (label) label.textContent = text;
+}
+
+function autoSizeComposerInput() {
+  if (!composerInput) return;
+  composerInput.style.height = '0px';
+  const nextHeight = Math.min(Math.max(composerInput.scrollHeight, 52), 132);
+  composerInput.style.height = `${nextHeight}px`;
+}
+
+function submitComposerInput() {
+  const value = (composerInput && composerInput.value ? composerInput.value : '').trim();
+  if (!value) return;
+
+  if (!activeTabId) {
+    showInAppNotice('没有可用会话', '请先创建一个终端会话。');
+    return;
+  }
+
+  window.api.sendTerminalData(activeTabId, `${value}\r`);
+  if (composerInput) composerInput.value = '';
+  autoSizeComposerInput();
+  terminalManager.focus(activeTabId);
+}
+
+function initializeComposer() {
+  if (!composerInput || !composerAttach || !composerModel || !composerEffort) return;
+
+  setComposerChipText(composerModel, composerModels[composerModelIndex]);
+  setComposerChipText(composerEffort, composerEfforts[composerEffortIndex]);
+  autoSizeComposerInput();
+
+  composerInput.addEventListener('input', () => {
+    autoSizeComposerInput();
+  });
+
+  composerInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      submitComposerInput();
+    }
+  });
+
+  composerAttach.addEventListener('click', () => {
+    showInAppNotice('更多功能', '附件与上下文选择功能将在后续版本提供。');
+  });
+
+  composerModel.addEventListener('click', () => {
+    composerModelIndex = (composerModelIndex + 1) % composerModels.length;
+    setComposerChipText(composerModel, composerModels[composerModelIndex]);
+  });
+
+  composerEffort.addEventListener('click', () => {
+    composerEffortIndex = (composerEffortIndex + 1) % composerEfforts.length;
+    setComposerChipText(composerEffort, composerEfforts[composerEffortIndex]);
+  });
+}
+
 function ensureInAppNoticeContainer() {
   if (inAppNoticeContainer && document.body.contains(inAppNoticeContainer)) {
     return inAppNoticeContainer;
@@ -527,5 +596,6 @@ setInterval(() => {
 
 // Initialize theme based on system preference
 initTheme();
+initializeComposer();
 
 loadRuntimeSettings().finally(() => createNewAiTab());

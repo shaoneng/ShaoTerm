@@ -31,6 +31,7 @@
   --space-md: 16px;
   --space-lg: 24px;
   --space-xl: 32px;
+  --composer-reserved: 116px;
 
   /* Border Radius */
   --radius-sm: 4px;
@@ -236,6 +237,7 @@ body {
 /* Terminal Container */
 #terminal-container {
   flex: 1;
+  min-height: 0;
   position: relative;
   overflow: hidden;
   background: var(--bg-primary);
@@ -363,10 +365,107 @@ body {
   background: var(--active);
 }
 
+/* Follow-up composer */
+#composer-shell {
+  width: min(760px, calc(100% - 2 * var(--space-lg)));
+  margin: 0 auto var(--space-md);
+  padding: 12px;
+  border-radius: 24px;
+  border: 0.5px solid var(--border);
+  background: color-mix(in srgb, var(--bg-secondary) 78%, var(--bg-primary));
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  flex-shrink: 0;
+}
+
+#composer-input {
+  width: 100%;
+  min-height: 52px;
+  max-height: 132px;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.35;
+  padding: 4px 10px 0;
+  user-select: text;
+}
+
+#composer-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+#composer-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 2px;
+}
+
+.composer-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 0.5px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.composer-icon-btn:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
+.composer-chip {
+  height: 34px;
+  border: none;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  transition: all 0.15s ease;
+}
+
+.composer-chip:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
+.composer-chip-label {
+  font-size: 14px;
+  letter-spacing: 0.01em;
+}
+
+.composer-chip-caret {
+  font-size: 12px;
+  margin-top: -1px;
+}
+
+.composer-icon-btn:focus-visible,
+.composer-chip:focus-visible,
+#composer-input:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 1px;
+}
+
 /* Scroll to Bottom Button - macOS Style */
 .scroll-bottom-btn {
   position: fixed;
-  bottom: var(--space-lg);
+  bottom: calc(var(--space-lg) + var(--composer-reserved));
   right: var(--space-lg);
   width: 36px;
   height: 36px;
@@ -466,4 +565,25 @@ body {
 .tab-title.analyzing {
   animation: pulse 1.2s ease-in-out infinite;
   color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  :root {
+    --composer-reserved: 104px;
+  }
+
+  #composer-shell {
+    width: calc(100% - 2 * var(--space-sm));
+    margin-bottom: var(--space-sm);
+    border-radius: 18px;
+  }
+
+  #composer-input {
+    min-height: 46px;
+    font-size: 14px;
+  }
+
+  .composer-chip-label {
+    font-size: 13px;
+  }
 }
