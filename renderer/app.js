@@ -1,5 +1,7 @@
 /* global TerminalManager */
 
+(function appRendererScope() {
+
 // --- Debug Logging System ---
 const DEBUG_MODE_STORAGE_KEY = 'shaoterm.debug-mode.v1';
 const DEBUG_MODE_QUERY_KEY = 'debug';
@@ -1219,3 +1221,5 @@ async function bootstrapApp() {
 bootstrapApp().catch((err) => {
   reportAsyncFailure('应用初始化失败', err, '初始化会话时出现异常，请尝试手动新建标签。');
 });
+
+})();
