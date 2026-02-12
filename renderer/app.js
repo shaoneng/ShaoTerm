@@ -73,9 +73,6 @@ const tabBar = document.getElementById('tab-bar');
 const btnAddTerminal = document.getElementById('btn-add-terminal');
 const btnAddAi = document.getElementById('btn-add-ai');
 const terminalContainer = document.getElementById('terminal-container');
-const btnRefresh = document.getElementById('btn-refresh');
-const btnCopyLogs = document.getElementById('btn-copy-logs');
-const btnTheme = document.getElementById('btn-theme');
 const btnSettings = document.getElementById('btn-settings');
 const btnScrollBottom = document.getElementById('btn-scroll-bottom');
 const settingsModal = document.getElementById('settings-modal');
@@ -314,61 +311,15 @@ function updateTabTitle(tabId, title, analyzing) {
   }
 }
 
-// --- Theme Toggle ---
+// --- Theme Init ---
 
-// Detect system theme on startup
+// Keep following system preference, but without manual toggle button in UI.
 const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
-let isLight = !prefersDark.matches; // Start with system preference
+const isLight = !prefersDark.matches;
 
-function toggleTheme() {
-  isLight = !isLight;
-  document.body.classList.toggle('light', isLight);
-  btnTheme.textContent = isLight ? '夜间模式' : '日间模式';
-  terminalManager.setLightMode(isLight);
-}
-
-// Initialize theme based on system preference
 function initTheme() {
   document.body.classList.toggle('light', isLight);
-  btnTheme.textContent = isLight ? '夜间模式' : '日间模式';
   terminalManager.setLightMode(isLight);
-}
-
-// --- Copy Logs ---
-
-function copyLogsToClipboard() {
-  console.log('Copy logs button clicked');
-
-  const logText = debugLogs.map(log => {
-    return `[${log.timestamp}] [${log.type.toUpperCase()}] ${log.message}`;
-  }).join('\n');
-
-  const fullReport = `=== ShaoTerm Debug Logs ===
-Generated: ${new Date().toISOString()}
-Total logs: ${debugLogs.length}
-
-${logText}
-
-=== System Info ===
-User Agent: ${navigator.userAgent}
-Platform: ${navigator.platform}
-Language: ${navigator.language}
-`;
-
-  navigator.clipboard.writeText(fullReport).then(() => {
-    console.log('Logs copied to clipboard successfully');
-    // Show temporary notification
-    const originalText = btnCopyLogs.textContent;
-    btnCopyLogs.textContent = '已复制!';
-    btnCopyLogs.style.backgroundColor = '#0dbc79';
-    setTimeout(() => {
-      btnCopyLogs.textContent = originalText;
-      btnCopyLogs.style.backgroundColor = '';
-    }, 2000);
-  }).catch(err => {
-    console.error('Failed to copy logs:', err);
-    alert('复制失败: ' + err.message);
-  });
 }
 
 // --- Settings Modal ---
@@ -495,9 +446,6 @@ console.log('Shortcut listeners set up complete');
 
 btnAddTerminal.addEventListener('click', () => createNewTab());
 btnAddAi.addEventListener('click', () => createNewAiTab());
-btnRefresh.addEventListener('click', () => refreshAllTopics());
-btnCopyLogs.addEventListener('click', () => copyLogsToClipboard());
-btnTheme.addEventListener('click', () => toggleTheme());
 btnSettings.addEventListener('click', () => openSettings());
 btnSettingsSave.addEventListener('click', () => saveSettings());
 btnSettingsCancel.addEventListener('click', () => closeSettings());
