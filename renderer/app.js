@@ -424,12 +424,56 @@ async function restoreTabsFromSnapshot() {
   return true;
 }
 
+function ensureFailureWrapper(tabId, existingWrapper) {
+  if (existingWrapper && existingWrapper.parentNode) {
+    return existingWrapper;
+  }
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'terminal-wrapper active';
+  wrapper.dataset.tabId = tabId;
+  terminalContainer.appendChild(wrapper);
+  return wrapper;
+}
+
+function renderSessionFailureState(tabId, wrapper, title, detail) {
+  const safeTitle = String(title || '会话创建失败').trim() || '会话创建失败';
+  const safeDetail = String(detail || '未知错误').replace(/\s+/g, ' ').trim().slice(0, 260) || '未知错误';
+  const failureWrapper = ensureFailureWrapper(tabId, wrapper);
+  failureWrapper.innerHTML = '';
+  failureWrapper.classList.add('active');
+
+  const panel = document.createElement('div');
+  panel.className = 'session-error-state';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'session-error-title';
+  titleEl.textContent = safeTitle;
+
+  const detailEl = document.createElement('div');
+  detailEl.className = 'session-error-detail';
+  detailEl.textContent = safeDetail;
+
+  panel.appendChild(titleEl);
+  panel.appendChild(detailEl);
+  failureWrapper.appendChild(panel);
+
+  updateTabHeartbeatMeta(tabId, {
+    status: 'error',
+    summary: safeTitle,
+    analysis: safeDetail,
+    at: new Date().toISOString()
+  });
+  showInAppNotice(safeTitle, safeDetail);
+  syncScrollBottomButton();
+  persistTabSnapshot();
+}
+
 async function createNewTab(options = {}) {
   try {
     const resolvedOptions = typeof options === 'string' ? { autoCommand: options } : (options || {});
     const skipDirectoryPrompt = !!resolvedOptions.skipDirectoryPrompt;
     const autoCommand = resolvedOptions.autoCommand ? normalizeAiCommand(resolvedOptions.autoCommand) : null;
-    const previousActiveTabId = activeTabId;
     let cwd = resolvedOptions.cwd || null;
     let dirName = resolvedOptions.title || '终端';
 
@@ -521,20 +565,13 @@ async function createNewTab(options = {}) {
       rows = size.rows;
     } catch (err) {
       console.warn('Failed to initialize terminal view:', err);
-      const tabIndex = tabs.findIndex((t) => t.id === tabId);
-      if (tabIndex >= 0) tabs.splice(tabIndex, 1);
-      if (tabEl && tabEl.parentNode) tabEl.remove();
-      if (wrapper && wrapper.parentNode) wrapper.remove();
-      activeTabId = previousActiveTabId && tabs.some((t) => t.id === previousActiveTabId)
-        ? previousActiveTabId
-        : (tabs[0] ? tabs[0].id : null);
-      if (activeTabId) {
-        switchToTabById(activeTabId);
-      } else {
-        syncScrollBottomButton();
-      }
-      showInAppNotice('终端加载失败', '终端渲染组件加载失败，请重启应用后重试。');
-      return null;
+      renderSessionFailureState(
+        tabId,
+        wrapper,
+        '终端加载失败',
+        `终端渲染组件初始化失败：${formatErrorDetail(err, '请重启应用后重试。')}`
+      );
+      return tabId;
     }
 
     let createResult = null;
@@ -547,23 +584,19 @@ async function createNewTab(options = {}) {
     } catch (err) {
       console.warn('Failed to create terminal session:', err);
       terminalManager.destroy(tabId);
-      window.api.closeTerminal(tabId).catch((closeErr) => {
-        console.warn('Failed to cleanup timed-out/failed terminal session:', closeErr);
-      });
-      const tabIndex = tabs.findIndex((t) => t.id === tabId);
-      if (tabIndex >= 0) tabs.splice(tabIndex, 1);
-      const staleTabEl = tabBar.querySelector(`.tab[data-tab-id="${tabId}"]`);
-      if (staleTabEl) staleTabEl.remove();
-      activeTabId = previousActiveTabId && tabs.some((t) => t.id === previousActiveTabId)
-        ? previousActiveTabId
-        : (tabs[0] ? tabs[0].id : null);
-      if (activeTabId) {
-        switchToTabById(activeTabId);
-      } else {
-        syncScrollBottomButton();
+      if (hasApiMethod('closeTerminal')) {
+        window.api.closeTerminal(tabId).catch((closeErr) => {
+          console.warn('Failed to cleanup timed-out/failed terminal session:', closeErr);
+        });
       }
-      showInAppNotice('会话创建失败', `无法创建终端会话：${formatErrorDetail(err)}`);
-      return null;
+      const failedWrapper = ensureFailureWrapper(tabId, null);
+      renderSessionFailureState(
+        tabId,
+        failedWrapper,
+        '会话创建失败',
+        `无法创建终端会话：${formatErrorDetail(err)}`
+      );
+      return tabId;
     }
 
     if (createResult && createResult.resolvedCwd) {
