@@ -11,6 +11,10 @@ const CONFIRM_ALERT_COOLDOWN_MS = 10000;
 const HEARTBEAT_INTERVAL_MS = 3 * 60 * 1000;
 const HEARTBEAT_MIN_CHARS = 120;
 const HEARTBEAT_CONTEXT_TAIL_CHARS = 2600;
+const HEARTBEAT_IDLE_GAP_MS = 12000;
+const HEARTBEAT_SESSION_TIMEOUT_MS = 25000;
+const HEARTBEAT_SUMMARY_TAG = 'HEARTBEAT_SUMMARY';
+const HEARTBEAT_ANALYSIS_TAG = 'HEARTBEAT_ANALYSIS';
 
 function toUnpackedPath(filePath) {
   return filePath
@@ -119,37 +123,106 @@ function createHeartbeatSignature(rawBuffer) {
     .slice(-HEARTBEAT_CONTEXT_TAIL_CHARS);
 }
 
+function parseSessionHeartbeat(rawText) {
+  const text = (rawText || '').replace(/\r/g, '\n');
+  const summaryMatch = text.match(new RegExp(`${HEARTBEAT_SUMMARY_TAG}\\s*[:：]\\s*(.+)`, 'i'));
+  const analysisMatch = text.match(new RegExp(`${HEARTBEAT_ANALYSIS_TAG}\\s*[:：]\\s*(.+)`, 'i'));
+  if (!summaryMatch || !analysisMatch) return null;
+
+  const summary = String(summaryMatch[1] || '').trim().slice(0, 120);
+  const analysis = String(analysisMatch[1] || '').trim().slice(0, 200);
+  if (!summary || !analysis) return null;
+  return { summary, analysis };
+}
+
+function resolveHeartbeatCollector(entry, report) {
+  if (!entry || !entry.heartbeatCollector) return;
+  const collector = entry.heartbeatCollector;
+  clearTimeout(collector.timeoutId);
+  entry.heartbeatCollector = null;
+  collector.resolve(report || null);
+}
+
+async function requestHeartbeatFromSession(entry) {
+  if (!entry || !entry.isAiSession || !entry.alive) return null;
+
+  const prompt = [
+    '请基于当前会话上下文做一次心跳总结，只输出两行：',
+    `1) ${HEARTBEAT_SUMMARY_TAG}: <不超过30字的一句话总结>`,
+    `2) ${HEARTBEAT_ANALYSIS_TAG}: <不超过60字的下一步建议>`,
+    '不要输出其他内容。'
+  ].join(' ');
+
+  return new Promise((resolve) => {
+    const timeoutId = setTimeout(() => {
+      resolveHeartbeatCollector(entry, null);
+    }, HEARTBEAT_SESSION_TIMEOUT_MS);
+
+    entry.heartbeatCollector = {
+      raw: '',
+      resolve,
+      timeoutId
+    };
+    entry.pty.write(`${prompt}\r`);
+  });
+}
+
 async function runHeartbeat(tabId, entry) {
   if (!entry || !entry.alive || entry.heartbeatInFlight) return;
+  if (entry.activitySeq <= entry.lastHeartbeatActivitySeq) return;
+
+  const now = Date.now();
+  const lastActivityAt = Math.max(entry.lastOutputAt || 0, entry.lastUserInputAt || 0);
+  if (lastActivityAt > 0 && now - lastActivityAt < HEARTBEAT_IDLE_GAP_MS) return;
 
   const signature = createHeartbeatSignature(entry.buffer);
   if (signature.length < HEARTBEAT_MIN_CHARS) return;
-  if (signature === entry.lastHeartbeatSignature) return;
 
   entry.heartbeatInFlight = true;
   try {
-    const report = await topicDetector.analyzeHeartbeat(signature);
+    const activityMark = entry.activitySeq;
+    let report = null;
+    let source = 'fallback';
+
+    if (entry.isAiSession) {
+      report = await requestHeartbeatFromSession(entry);
+      if (report) {
+        source = 'session-ai';
+      }
+    }
+
+    if (!report) {
+      report = await topicDetector.analyzeHeartbeat(signature);
+    }
+
     entry.lastHeartbeatSignature = signature;
+    entry.lastHeartbeatActivitySeq = activityMark;
 
     if (win && !win.isDestroyed()) {
       win.webContents.send('terminal:heartbeat-summary', {
         tabId,
         summary: report.summary || '会话进行中',
         analysis: report.analysis || '请继续查看最新输出。',
+        source,
         at: new Date().toISOString()
       });
     }
   } catch (err) {
     console.warn(`[heartbeat] Failed for tab ${tabId}:`, err.message);
   } finally {
+    resolveHeartbeatCollector(entry, null);
     entry.heartbeatInFlight = false;
   }
 }
 
 function stopHeartbeat(entry) {
-  if (!entry || !entry.heartbeatTimer) return;
-  clearInterval(entry.heartbeatTimer);
-  entry.heartbeatTimer = null;
+  if (!entry) return;
+  if (entry.heartbeatTimer) {
+    clearInterval(entry.heartbeatTimer);
+    entry.heartbeatTimer = null;
+  }
+  resolveHeartbeatCollector(entry, null);
+  entry.heartbeatInFlight = false;
 }
 
 function startHeartbeat(tabId, entry) {
@@ -259,8 +332,14 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     pty: ptyProcess,
     buffer: '',
     alive: true,
+    isAiSession: !!autoCommand,
+    activitySeq: 0,
+    lastHeartbeatActivitySeq: -1,
+    lastOutputAt: Date.now(),
+    lastUserInputAt: 0,
     heartbeatInFlight: false,
     heartbeatTimer: null,
+    heartbeatCollector: null,
     lastHeartbeatSignature: ''
   };
   terminals.set(tabId, entry);
@@ -277,6 +356,20 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     }
 
     const plain = stripAnsiForDetection(data);
+    if (entry.heartbeatInFlight && entry.heartbeatCollector) {
+      entry.heartbeatCollector.raw += plain;
+      if (entry.heartbeatCollector.raw.length > 6000) {
+        entry.heartbeatCollector.raw = entry.heartbeatCollector.raw.slice(-6000);
+      }
+      const parsed = parseSessionHeartbeat(entry.heartbeatCollector.raw);
+      if (parsed) {
+        resolveHeartbeatCollector(entry, parsed);
+      }
+    } else if (plain.trim()) {
+      entry.activitySeq += 1;
+      entry.lastOutputAt = Date.now();
+    }
+
     if (shouldNotifyConfirmPrompt(tabId, plain) && win && !win.isDestroyed()) {
       win.webContents.send('terminal:confirm-needed', {
         tabId,
@@ -321,6 +414,10 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
 ipcMain.on('terminal:data', (event, { tabId, data }) => {
   const entry = terminals.get(tabId);
   if (entry && entry.alive) {
+    if (!entry.heartbeatInFlight && (data || '').trim()) {
+      entry.activitySeq += 1;
+      entry.lastUserInputAt = Date.now();
+    }
     entry.pty.write(data);
   }
 });
