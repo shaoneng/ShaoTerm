@@ -28,12 +28,7 @@
     "productName": "DontbeTerm",
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": [
-        {
-          "target": "dmg",
-          "arch": ["x64", "arm64"]
-        }
-      ],
+      "target": ["dmg"],
       "icon": "build/icon.icns",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
