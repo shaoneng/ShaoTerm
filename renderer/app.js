@@ -582,18 +582,21 @@ async function restoreTabsFromSnapshot() {
     for (let i = 0; i < snapshotTabs.length; i += 1) {
       const tab = snapshotTabs[i];
       const isActiveTab = i === activeIndex;
+      const restoredAutoCommand = String(tab.lastCliCommand || tab.autoCommand || '').trim();
+      const shouldUseFastShell = !restoredAutoCommand;
       try {
         const restoredId = await createNewTab({
           title: tab.title || '终端',
           manuallyRenamed: !!tab.manuallyRenamed,
           cwd: tab.cwd || null,
-          autoCommand: tab.lastCliCommand || tab.autoCommand || null,
+          autoCommand: restoredAutoCommand || null,
           skipDirectoryPrompt: true,
           activate: isActiveTab,
           deferSessionStart: !isActiveTab,
           deferAutoRun: true,
           deferPendingCommandFlush: true,
-          shellMode: STARTUP_FAST_SHELL_MODE
+          // CLI session must use login shell to load user PATH (~/.zshrc), otherwise codex/opencode may be missing.
+          shellMode: shouldUseFastShell ? STARTUP_FAST_SHELL_MODE : ''
         });
         if (restoredId) restoredCount += 1;
       } catch (tabErr) {
