@@ -23,6 +23,7 @@ const HEARTBEAT_DEFAULT_QUERY_DAYS = 14;
 const HEARTBEAT_DEFAULT_QUERY_LIMIT = 40;
 const SESSION_ARCHIVE_DIRNAME = 'session-archive';
 const TAB_STATE_FILENAME = 'tab-state.json';
+const ANALYSIS_BUFFER_MAX_CHARS = 24000;
 const heartbeatRuntime = {
   enabled: true,
   intervalMs: DEFAULT_HEARTBEAT_INTERVAL_MS
@@ -172,6 +173,15 @@ function createHeartbeatSignature(rawBuffer) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(-HEARTBEAT_CONTEXT_TAIL_CHARS);
+}
+
+function appendAnalysisBuffer(entry, text) {
+  if (!entry) return;
+  const chunk = stripAnsiForDetection(String(text || ''))
+    .replace(/\r/g, '\n')
+    .replace(/\n{3,}/g, '\n\n');
+  if (!chunk.trim()) return;
+  entry.analysisBuffer = `${entry.analysisBuffer || ''}\n${chunk}`.slice(-ANALYSIS_BUFFER_MAX_CHARS);
 }
 
 function hasHeartbeatSignal(text) {
@@ -1270,6 +1280,7 @@ ipcMain.handle('terminal:create', (event, payload = {}) => {
     lastHeartbeatAt: 0,
     lastHeartbeatReport: null,
     sessionProfile: null,
+    analysisBuffer: '',
     inputLineBuffer: '',
     inputEscapeSequence: false
   };
@@ -1301,6 +1312,7 @@ ipcMain.handle('terminal:create', (event, payload = {}) => {
     if (plain.trim()) {
       entry.activitySeq += 1;
       entry.lastOutputAt = Date.now();
+      appendAnalysisBuffer(entry, plain);
       const profileChanged = updateSessionProfileFromHint(entry, plain.slice(-300), 'terminal_output', 70);
       if (profileChanged) {
         emitSessionProfileUpdate(tabId, entry, 'terminal_output');
@@ -1392,6 +1404,7 @@ ipcMain.on('terminal:data', (event, { tabId, data }) => {
         const completedLine = sanitizeArchiveLine(entry.inputLineBuffer || '', 220);
         entry.inputLineBuffer = '';
         if (completedLine) {
+          appendAnalysisBuffer(entry, `$ ${completedLine}`);
           const inferredAutoCommand = extractAutoCommandFromInputLine(completedLine);
           if (inferredAutoCommand) {
             const sanitizedCommand = sanitizeArchiveLine(inferredAutoCommand, 220);
@@ -1411,7 +1424,7 @@ ipcMain.on('terminal:data', (event, { tabId, data }) => {
         entry.inputLineBuffer = String(entry.inputLineBuffer || '').slice(0, -1);
         continue;
       }
-      if (/[\x20-\x7E]/.test(ch)) {
+      if (!/[\u0000-\u001F\u007F]/.test(ch)) {
         entry.inputLineBuffer = `${entry.inputLineBuffer || ''}${ch}`.slice(-220);
       }
     }
@@ -1454,7 +1467,7 @@ ipcMain.handle('topic:refresh', async (event, options = {}) => {
     if (requestedEntry) {
       tabBuffers.push({
         tabId: requestedTabId,
-        buffer: requestedEntry.buffer,
+        buffer: requestedEntry.analysisBuffer || requestedEntry.buffer,
         context: buildTopicAnalysisContext(requestedEntry)
       });
     }
@@ -1462,7 +1475,7 @@ ipcMain.handle('topic:refresh', async (event, options = {}) => {
     for (const [tabId, entry] of terminals) {
       tabBuffers.push({
         tabId,
-        buffer: entry.buffer,
+        buffer: entry.analysisBuffer || entry.buffer,
         context: buildTopicAnalysisContext(entry)
       });
     }
