@@ -32,7 +32,7 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   // Topic detection
-  refreshTopics: () => ipcRenderer.invoke('topic:refresh'),
+  refreshTopics: (options) => ipcRenderer.invoke('topic:refresh', options || {}),
   onTopicStatus: (callback) => {
     ipcRenderer.on('topic:status', (event, payload) => callback(payload));
   },

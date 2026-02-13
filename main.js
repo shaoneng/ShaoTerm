@@ -1096,14 +1096,34 @@ ipcMain.handle('terminal:close', (event, { tabId }) => {
 
 // --- IPC: Topic detection ---
 
-ipcMain.handle('topic:refresh', async () => {
+ipcMain.handle('topic:refresh', async (event, options = {}) => {
+  const requestedTabId = sanitizeArchiveLine(options.tabId, 80);
   const tabBuffers = [];
-  for (const [tabId, entry] of terminals) {
-    tabBuffers.push({
-      tabId,
-      buffer: entry.buffer,
-      context: buildTopicAnalysisContext(entry)
-    });
+  if (requestedTabId) {
+    const requestedEntry = terminals.get(requestedTabId);
+    if (requestedEntry) {
+      tabBuffers.push({
+        tabId: requestedTabId,
+        buffer: requestedEntry.buffer,
+        context: buildTopicAnalysisContext(requestedEntry)
+      });
+    }
+  } else {
+    for (const [tabId, entry] of terminals) {
+      tabBuffers.push({
+        tabId,
+        buffer: entry.buffer,
+        context: buildTopicAnalysisContext(entry)
+      });
+    }
+  }
+
+  if (tabBuffers.length === 0) {
+    return { success: false, error: 'no_target_tab' };
+  }
+
+  for (const item of tabBuffers) {
+    item.tabId = String(item.tabId || '');
   }
 
   try {
@@ -1111,7 +1131,7 @@ ipcMain.handle('topic:refresh', async () => {
     for (const { tabId, topic } of results) {
       if (win && !win.isDestroyed()) {
         win.webContents.send('topic:status', {
-          tabId, status: 'done', topic
+          tabId: String(tabId || ''), status: 'done', topic
         });
       }
     }
@@ -1120,7 +1140,7 @@ ipcMain.handle('topic:refresh', async () => {
     for (const { tabId } of tabBuffers) {
       if (win && !win.isDestroyed()) {
         win.webContents.send('topic:status', {
-          tabId, status: 'error', topic: '新对话'
+          tabId: String(tabId || ''), status: 'error', topic: '新对话'
         });
       }
     }

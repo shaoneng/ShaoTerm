@@ -120,6 +120,7 @@ const terminalManager = (() => {
   return createFallbackTerminalManager();
 })();
 const tabs = []; // { id, title, manuallyRenamed, cwd, autoCommand, heartbeatStatus, heartbeatSummary, heartbeatAnalysis, heartbeatAt }
+const pendingTopicRefreshTabs = new Set();
 let activeTabId = null;
 let inAppNoticeContainer = null;
 const TAB_SNAPSHOT_KEY = 'shaoterm.tab-snapshot.v1';
@@ -738,6 +739,7 @@ async function closeTab(tabId) {
   }
 
   tabs.splice(index, 1);
+  pendingTopicRefreshTabs.delete(tabId);
   const tabEl = tabBar.querySelector(`.tab[data-tab-id="${tabId}"]`);
   if (tabEl) tabEl.remove();
   terminalManager.destroy(tabId);
@@ -796,12 +798,27 @@ function startRename(tabEl, tabData) {
 // --- Topic Detection ---
 
 async function refreshAllTopics() {
-  tabs.forEach((tabData) => {
-    if (!tabData.manuallyRenamed) {
-      updateTabTitle(tabData.id, '分析中...', true);
-    }
-  });
-  await window.api.refreshTopics();
+  const targetTabId = String(activeTabId || '').trim();
+  if (!targetTabId) {
+    showInAppNotice('刷新失败', '当前没有可刷新的会话标签。');
+    return;
+  }
+
+  const targetTab = tabs.find((tab) => tab.id === targetTabId);
+  if (!targetTab) {
+    showInAppNotice('刷新失败', '未找到当前会话标签，请重试。');
+    return;
+  }
+
+  pendingTopicRefreshTabs.add(targetTabId);
+  updateTabTitle(targetTabId, '分析中...', true);
+
+  const result = await window.api.refreshTopics({ tabId: targetTabId });
+  if (!result || result.success !== true) {
+    pendingTopicRefreshTabs.delete(targetTabId);
+    const reason = result && result.error ? String(result.error) : '未知错误';
+    showInAppNotice('刷新会话分析失败', `原因：${reason}`);
+  }
 }
 
 function updateTabTitle(tabId, title, analyzing) {
@@ -1117,10 +1134,20 @@ registerApiListener('onTerminalConfirmNeeded', ({ tabId, prompt }) => {
 });
 
 registerApiListener('onTopicStatus', ({ tabId, status, topic }) => {
-  const tabData = tabs.find((t) => t.id === tabId);
-  if (tabData && !tabData.manuallyRenamed) {
-    updateTabTitle(tabId, topic, false);
+  const normalizedTabId = String(tabId || '').trim();
+  if (!normalizedTabId) return;
+
+  const tabData = tabs.find((t) => t.id === normalizedTabId);
+  if (!tabData) return;
+
+  const requestedByUser = pendingTopicRefreshTabs.has(normalizedTabId);
+  if (status === 'done' && (requestedByUser || !tabData.manuallyRenamed)) {
+    updateTabTitle(normalizedTabId, topic, false);
+  } else {
+    renderTabLabel(normalizedTabId, false);
   }
+
+  pendingTopicRefreshTabs.delete(normalizedTabId);
 });
 
 // Handle file drops from main process
