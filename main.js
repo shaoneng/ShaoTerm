@@ -32,11 +32,14 @@ const HEARTBEAT_WAITING_PATTERN = /是否继续|请确认|确认\?|are you sure|
 const HEARTBEAT_SIGNAL_PATTERNS = [HEARTBEAT_ERROR_PATTERN, HEARTBEAT_SUCCESS_PATTERN, HEARTBEAT_WAITING_PATTERN];
 const CLI_PROVIDER_PATTERNS = [
   { cli: 'codex', provider: 'openai', pattern: /\bcodex\b|\bopenai\b|\bgpt-[a-z0-9._-]+/i },
+  { cli: 'opencode', provider: 'openai', pattern: /\bopencode\b/i },
   { cli: 'claude', provider: 'anthropic', pattern: /\bclaude\b|\banthropic\b/i },
   { cli: 'gemini', provider: 'google', pattern: /\bgemini\b|\bgoogle-ai\b/i },
   { cli: 'qwen', provider: 'qwen', pattern: /\bqwen\b|\bdashscope\b/i },
   { cli: 'deepseek', provider: 'deepseek', pattern: /\bdeepseek\b/i }
 ];
+const CLI_COMMAND_BINARIES = new Set(['codex', 'opencode', 'claude', 'gemini', 'qwen', 'deepseek']);
+const CLI_WRAPPER_COMMANDS = new Set(['npx', 'bunx', 'uvx']);
 const MODEL_TOKEN_PATTERNS = [
   /\b(gpt-[a-z0-9._-]+)\b/i,
   /\b(claude-[a-z0-9._-]+)\b/i,
@@ -289,11 +292,127 @@ function ensureSessionProfile(entry, autoCommandHint = '') {
   return initial;
 }
 
+function buildAutoCommandFromSessionProfile(profile, fallback = '') {
+  const source = profile && typeof profile === 'object' ? profile : null;
+  const fallbackCommand = sanitizeArchiveLine(fallback || '', 220);
+  if (!source) return fallbackCommand;
+
+  const cli = sanitizeArchiveLine(source.cli || '', 40).toLowerCase();
+  const model = sanitizeArchiveLine(source.model || '', 80);
+  if (!cli || cli === 'unknown') return fallbackCommand;
+
+  if (cli === 'codex') {
+    return model ? `codex -m ${model}` : 'codex';
+  }
+  if (CLI_COMMAND_BINARIES.has(cli)) {
+    return cli;
+  }
+  return fallbackCommand;
+}
+
+function sessionProfileSignature(profile) {
+  if (!profile || typeof profile !== 'object') return 'unknown|unknown||0|unknown';
+  const cli = sanitizeArchiveLine(profile.cli || 'unknown', 40) || 'unknown';
+  const provider = sanitizeArchiveLine(profile.provider || 'unknown', 40) || 'unknown';
+  const model = sanitizeArchiveLine(profile.model || '', 80);
+  const confidence = clampInteger(profile.confidence, 0, 100, 0);
+  const detectedFrom = sanitizeArchiveLine(profile.detectedFrom || 'unknown', 40) || 'unknown';
+  return `${cli}|${provider}|${model}|${confidence}|${detectedFrom}`;
+}
+
+function normalizeCommandBinary(commandLine) {
+  const raw = sanitizeArchiveLine(commandLine || '', 220).toLowerCase();
+  if (!raw) return '';
+  const token = raw.split(/\s+/)[0] || '';
+  const base = token.split('/').pop() || token;
+  return base.replace(/\.[a-z0-9]+$/i, '');
+}
+
+function extractAutoCommandFromInputLine(inputLine) {
+  const normalizedLine = sanitizeArchiveLine(inputLine || '', 220);
+  if (!normalizedLine) return '';
+
+  const tokens = normalizedLine.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return '';
+
+  let cursor = 0;
+  while (cursor < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(tokens[cursor])) {
+    cursor += 1;
+  }
+  if (cursor < tokens.length && tokens[cursor] === 'env') {
+    cursor += 1;
+    while (cursor < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(tokens[cursor])) {
+      cursor += 1;
+    }
+  }
+  if (cursor >= tokens.length) return '';
+
+  const first = (tokens[cursor] || '').toLowerCase();
+  let binary = first;
+  if (CLI_WRAPPER_COMMANDS.has(first)) {
+    binary = (tokens[cursor + 1] || '').toLowerCase();
+  } else if (first === 'pnpm') {
+    const sub = (tokens[cursor + 1] || '').toLowerCase();
+    if (sub === 'dlx' || sub === 'exec') binary = (tokens[cursor + 2] || '').toLowerCase();
+    else binary = sub;
+  } else if (first === 'yarn') {
+    const sub = (tokens[cursor + 1] || '').toLowerCase();
+    binary = sub === 'dlx' ? (tokens[cursor + 2] || '').toLowerCase() : sub;
+  } else if (first === 'npm') {
+    const sub = (tokens[cursor + 1] || '').toLowerCase();
+    if (sub === 'exec') binary = (tokens[cursor + 2] || '').toLowerCase();
+  }
+
+  binary = normalizeCommandBinary(binary);
+  if (!binary || !CLI_COMMAND_BINARIES.has(binary)) return '';
+  return normalizedLine;
+}
+
+function updateAutoCommandFromSessionProfile(entry, profile) {
+  if (!entry || !profile) return false;
+  const confidence = clampInteger(profile.confidence, 0, 100, 0);
+  if (confidence < 72) return false;
+
+  const inferred = buildAutoCommandFromSessionProfile(profile, '');
+  if (!inferred) return false;
+
+  const previous = sanitizeArchiveLine(entry.autoCommand || '', 220);
+  const prevBinary = normalizeCommandBinary(previous);
+  const nextBinary = normalizeCommandBinary(inferred);
+  const shouldSwitchBinary = !prevBinary || prevBinary === nextBinary || confidence >= 82;
+  if (!shouldSwitchBinary) return false;
+  if (previous === inferred) return false;
+
+  entry.autoCommand = inferred;
+  entry.isAiSession = true;
+  return true;
+}
+
+function emitSessionProfileUpdate(tabId, entry, source = 'detected') {
+  if (!win || win.isDestroyed() || !entry) return;
+  const profile = ensureSessionProfile(entry, entry.autoCommand);
+  const autoCommand = sanitizeArchiveLine(
+    entry.autoCommand || buildAutoCommandFromSessionProfile(profile, ''),
+    220
+  );
+  win.webContents.send('terminal:session-profile', {
+    tabId,
+    autoCommand,
+    sessionProfile: profile,
+    source: sanitizeArchiveLine(source || 'detected', 32) || 'detected',
+    at: new Date().toISOString()
+  });
+}
+
 function updateSessionProfileFromHint(entry, hintText, detectedFrom, confidence) {
-  if (!entry) return;
+  if (!entry) return false;
+  const previousProfile = ensureSessionProfile(entry, entry.autoCommand);
+  const previousSignature = sessionProfileSignature(previousProfile);
   const next = createSessionProfileFromHint(hintText, detectedFrom, confidence);
-  if (!next) return;
-  entry.sessionProfile = mergeSessionProfile(ensureSessionProfile(entry, entry.autoCommand), next);
+  if (!next) return false;
+  entry.sessionProfile = mergeSessionProfile(previousProfile, next);
+  const commandChanged = updateAutoCommandFromSessionProfile(entry, entry.sessionProfile);
+  return previousSignature !== sessionProfileSignature(entry.sessionProfile) || commandChanged;
 }
 
 function buildTopicAnalysisContext(entry) {
@@ -1024,10 +1143,13 @@ ipcMain.handle('terminal:create', (event, payload = {}) => {
     lastHeartbeatSignature: '',
     lastHeartbeatAt: 0,
     lastHeartbeatReport: null,
-    sessionProfile: null
+    sessionProfile: null,
+    inputLineBuffer: '',
+    inputEscapeSequence: false
   };
   entry.sessionProfile = ensureSessionProfile(entry, entry.autoCommand);
   terminals.set(tabId, entry);
+  emitSessionProfileUpdate(tabId, entry, 'session_create');
   startHeartbeat(tabId, entry);
   appendHeartbeatArchiveRecord(tabId, entry, 'session_start', {
     summary: '会话已启动',
@@ -1053,7 +1175,10 @@ ipcMain.handle('terminal:create', (event, payload = {}) => {
     if (plain.trim()) {
       entry.activitySeq += 1;
       entry.lastOutputAt = Date.now();
-      updateSessionProfileFromHint(entry, plain.slice(-300), 'terminal_output', 70);
+      const profileChanged = updateSessionProfileFromHint(entry, plain.slice(-300), 'terminal_output', 70);
+      if (profileChanged) {
+        emitSessionProfileUpdate(tabId, entry, 'terminal_output');
+      }
       if (hasHeartbeatSignal(plain)) {
         scheduleHeartbeatFromSignal(tabId, entry);
       }
@@ -1118,10 +1243,55 @@ ipcMain.handle('terminal:create', (event, payload = {}) => {
 ipcMain.on('terminal:data', (event, { tabId, data }) => {
   const entry = terminals.get(tabId);
   if (entry && entry.alive) {
-    if ((data || '').trim()) {
+    const incoming = String(data || '');
+    let profileChanged = false;
+    if (incoming.trim()) {
       entry.activitySeq += 1;
       entry.lastUserInputAt = Date.now();
-      updateSessionProfileFromHint(entry, String(data).slice(-240), 'user_input', 80);
+      profileChanged = updateSessionProfileFromHint(entry, incoming.slice(-240), 'user_input', 80);
+    }
+
+    for (const ch of incoming) {
+      if (entry.inputEscapeSequence) {
+        if (/[A-Za-z~]/.test(ch)) {
+          entry.inputEscapeSequence = false;
+        }
+        continue;
+      }
+      if (ch === '\u001b') {
+        entry.inputEscapeSequence = true;
+        continue;
+      }
+      if (ch === '\r' || ch === '\n') {
+        const completedLine = sanitizeArchiveLine(entry.inputLineBuffer || '', 220);
+        entry.inputLineBuffer = '';
+        if (completedLine) {
+          const inferredAutoCommand = extractAutoCommandFromInputLine(completedLine);
+          if (inferredAutoCommand) {
+            const sanitizedCommand = sanitizeArchiveLine(inferredAutoCommand, 220);
+            if (sanitizedCommand && entry.autoCommand !== sanitizedCommand) {
+              entry.autoCommand = sanitizedCommand;
+              entry.isAiSession = true;
+              profileChanged = true;
+            }
+            if (updateSessionProfileFromHint(entry, sanitizedCommand, 'user_command', 96)) {
+              profileChanged = true;
+            }
+          }
+        }
+        continue;
+      }
+      if (ch === '\u007f' || ch === '\b') {
+        entry.inputLineBuffer = String(entry.inputLineBuffer || '').slice(0, -1);
+        continue;
+      }
+      if (/[\x20-\x7E]/.test(ch)) {
+        entry.inputLineBuffer = `${entry.inputLineBuffer || ''}${ch}`.slice(-220);
+      }
+    }
+
+    if (profileChanged) {
+      emitSessionProfileUpdate(tabId, entry, 'user_input');
     }
     entry.pty.write(data);
   }

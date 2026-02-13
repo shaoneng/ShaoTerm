@@ -341,6 +341,24 @@ function normalizeAiCommand(value) {
   return normalized || 'codex';
 }
 
+function normalizeOptionalCommand(value) {
+  return String(value || '').trim();
+}
+
+function syncTabAutoCommand(tabData, nextCommand, source = 'session_profile') {
+  if (!tabData) return false;
+  const normalizedNext = normalizeOptionalCommand(nextCommand);
+  if (!normalizedNext) return false;
+
+  const normalizedCurrent = normalizeOptionalCommand(tabData.autoCommand);
+  if (normalizedCurrent === normalizedNext) return false;
+
+  tabData.autoCommand = normalizedNext;
+  debugLog(`[tab][auto-command] ${tabData.title || tabData.id} -> ${normalizedNext} (${source})`);
+  persistTabSnapshot();
+  return true;
+}
+
 function withTimeout(promise, timeoutMs, message) {
   let timer = null;
   const timeoutPromise = new Promise((_, reject) => {
@@ -1280,6 +1298,12 @@ registerApiListener('onTerminalHeartbeatSummary', ({ tabId, summary, analysis, s
     at
   });
   debugLog(`[heartbeat][silent] ${tabTitle}: ${compactSummary}${compactAnalysis ? ` | ${compactAnalysis}` : ''}`);
+});
+
+registerApiListener('onTerminalSessionProfile', ({ tabId, autoCommand, source }) => {
+  const tabData = tabs.find((t) => t.id === tabId);
+  if (!tabData) return;
+  syncTabAutoCommand(tabData, autoCommand, source || 'session_profile');
 });
 
 registerApiListener('onTerminalConfirmNeeded', ({ tabId, prompt }) => {

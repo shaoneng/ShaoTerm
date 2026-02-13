@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('api', {
   onTerminalHeartbeatSummary: (callback) => {
     ipcRenderer.on('terminal:heartbeat-summary', (event, payload) => callback(payload));
   },
+  onTerminalSessionProfile: (callback) => {
+    ipcRenderer.on('terminal:session-profile', (event, payload) => callback(payload));
+  },
   onTerminalConfirmNeeded: (callback) => {
     ipcRenderer.on('terminal:confirm-needed', (event, payload) => callback(payload));
   },
