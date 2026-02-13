@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld('api', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (apiKey, baseUrl, aiCommand, heartbeat) =>
     ipcRenderer.invoke('settings:save', { apiKey, baseUrl, aiCommand, heartbeat }),
+  getTabSnapshot: () => ipcRenderer.invoke('tabs:snapshot:get'),
+  saveTabSnapshot: (snapshot) => ipcRenderer.invoke('tabs:snapshot:save', { snapshot }),
   queryHeartbeatArchive: (options) => ipcRenderer.invoke('heartbeat:query', options || {}),
   summarizeHeartbeatArchive: (options) => ipcRenderer.invoke('heartbeat:summarize', options || {}),
 

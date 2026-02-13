@@ -124,7 +124,11 @@ const pendingTopicRefreshTabs = new Set();
 let activeTabId = null;
 let inAppNoticeContainer = null;
 const TAB_SNAPSHOT_KEY = 'shaoterm.tab-snapshot.v1';
+const TAB_SNAPSHOT_SCHEMA_VERSION = 2;
 let isRestoringTabs = false;
+let pendingTabSnapshotPayload = null;
+let tabSnapshotPersistTimer = null;
+let tabSnapshotFlushInFlight = false;
 
 // DOM references
 const tabBar = document.getElementById('tab-bar');
@@ -355,7 +359,7 @@ function syncTabAutoCommand(tabData, nextCommand, source = 'session_profile') {
 
   tabData.autoCommand = normalizedNext;
   debugLog(`[tab][auto-command] ${tabData.title || tabData.id} -> ${normalizedNext} (${source})`);
-  persistTabSnapshot();
+  persistTabSnapshot({ immediate: true });
   return true;
 }
 
@@ -398,41 +402,169 @@ function registerApiListener(methodName, callback) {
 
 function createTabSnapshot() {
   return {
-    version: 1,
-    activeIndex: tabs.findIndex((tab) => tab.id === activeTabId),
+    version: TAB_SNAPSHOT_SCHEMA_VERSION,
+    activeTabId: activeTabId || '',
     tabs: tabs.map((tab) => ({
+      tabId: tab.id,
       title: tab.title,
       manuallyRenamed: !!tab.manuallyRenamed,
       cwd: tab.cwd || '',
+      lastCliCommand: tab.autoCommand || '',
       autoCommand: tab.autoCommand || ''
     }))
   };
 }
 
-function persistTabSnapshot() {
-  if (isRestoringTabs) return;
+function normalizeTabSnapshot(snapshot) {
+  const raw = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const rawTabs = Array.isArray(raw.tabs) ? raw.tabs : [];
+  const tabsList = rawTabs
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+      const tabId = String(item.tabId || item.id || `tab-${index + 1}`).trim();
+      const title = String(item.title || '').trim() || '终端';
+      const cwd = String(item.cwd || '').trim();
+      const lastCliCommand = String(item.lastCliCommand || item.autoCommand || '').trim();
+      return {
+        tabId,
+        title,
+        manuallyRenamed: !!item.manuallyRenamed,
+        cwd,
+        lastCliCommand,
+        autoCommand: lastCliCommand
+      };
+    })
+    .filter(Boolean);
+
+  let activeTabId = String(raw.activeTabId || '').trim();
+  if (!activeTabId && Number.isInteger(raw.activeIndex)) {
+    const fromIndex = tabsList[raw.activeIndex];
+    activeTabId = fromIndex ? fromIndex.tabId : '';
+  }
+  if (activeTabId && !tabsList.some((tab) => tab.tabId === activeTabId)) {
+    activeTabId = '';
+  }
+  if (!activeTabId && tabsList.length > 0) {
+    activeTabId = tabsList[tabsList.length - 1].tabId;
+  }
+
+  return {
+    version: TAB_SNAPSHOT_SCHEMA_VERSION,
+    activeTabId,
+    tabs: tabsList
+  };
+}
+
+async function flushPendingTabSnapshot() {
+  if (tabSnapshotFlushInFlight) return;
+  const payload = pendingTabSnapshotPayload;
+  if (!payload) return;
+  if (!hasApiMethod('saveTabSnapshot')) return;
+
+  pendingTabSnapshotPayload = null;
+  tabSnapshotFlushInFlight = true;
   try {
-    window.localStorage.setItem(TAB_SNAPSHOT_KEY, JSON.stringify(createTabSnapshot()));
+    await window.api.saveTabSnapshot(payload);
   } catch (err) {
-    console.warn('Failed to persist tab snapshot:', err);
+    console.warn('Failed to persist tab snapshot to main process:', err);
+    pendingTabSnapshotPayload = payload;
+  } finally {
+    tabSnapshotFlushInFlight = false;
+    if (pendingTabSnapshotPayload) {
+      setTimeout(() => {
+        flushPendingTabSnapshot().catch((flushErr) => {
+          console.warn('Failed to retry tab snapshot flush:', flushErr);
+        });
+      }, 180);
+    }
   }
 }
 
-function loadTabSnapshot() {
+function persistTabSnapshot(options = {}) {
+  if (isRestoringTabs) return;
+  const snapshot = createTabSnapshot();
+  const immediate = !!options.immediate;
+
+  pendingTabSnapshotPayload = snapshot;
+  try {
+    // Keep local backup for one-time migration / emergency fallback.
+    window.localStorage.setItem(TAB_SNAPSHOT_KEY, JSON.stringify(snapshot));
+  } catch (err) {
+    console.warn('Failed to persist tab snapshot to localStorage backup:', err);
+  }
+
+  if (immediate) {
+    if (tabSnapshotPersistTimer) {
+      clearTimeout(tabSnapshotPersistTimer);
+      tabSnapshotPersistTimer = null;
+    }
+    flushPendingTabSnapshot().catch((flushErr) => {
+      console.warn('Failed to flush tab snapshot immediately:', flushErr);
+    });
+    return;
+  }
+
+  if (tabSnapshotPersistTimer) return;
+  tabSnapshotPersistTimer = setTimeout(() => {
+    tabSnapshotPersistTimer = null;
+    flushPendingTabSnapshot().catch((flushErr) => {
+      console.warn('Failed to flush tab snapshot:', flushErr);
+    });
+  }, 160);
+}
+
+function loadLegacyLocalSnapshot() {
   try {
     const raw = window.localStorage.getItem(TAB_SNAPSHOT_KEY);
     if (!raw) return null;
-    const snapshot = JSON.parse(raw);
-    if (!snapshot || !Array.isArray(snapshot.tabs) || snapshot.tabs.length === 0) return null;
-    return snapshot;
+    const parsed = JSON.parse(raw);
+    const normalized = normalizeTabSnapshot(parsed);
+    if (!Array.isArray(normalized.tabs) || normalized.tabs.length === 0) return null;
+    return normalized;
   } catch (err) {
-    console.warn('Failed to load tab snapshot:', err);
+    console.warn('Failed to parse legacy local tab snapshot:', err);
     return null;
   }
 }
 
+async function loadTabSnapshot() {
+  if (hasApiMethod('getTabSnapshot')) {
+    try {
+      const remoteSnapshot = await window.api.getTabSnapshot();
+      const normalizedRemote = normalizeTabSnapshot(remoteSnapshot);
+      if (Array.isArray(normalizedRemote.tabs) && normalizedRemote.tabs.length > 0) {
+        return normalizedRemote;
+      }
+    } catch (err) {
+      console.warn('Failed to load tab snapshot from main process:', err);
+    }
+  }
+
+  const legacySnapshot = loadLegacyLocalSnapshot();
+  if (!legacySnapshot) return null;
+
+  if (hasApiMethod('saveTabSnapshot')) {
+    pendingTabSnapshotPayload = legacySnapshot;
+    flushPendingTabSnapshot().catch((err) => {
+      console.warn('Failed to migrate legacy tab snapshot to main process:', err);
+    });
+  }
+
+  return legacySnapshot;
+}
+
+function resolveSnapshotActiveIndex(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.tabs) || snapshot.tabs.length === 0) return -1;
+  const targetId = String(snapshot.activeTabId || '').trim();
+  if (targetId) {
+    const index = snapshot.tabs.findIndex((tab) => String(tab.tabId || '').trim() === targetId);
+    if (index >= 0) return index;
+  }
+  return Math.max(snapshot.tabs.length - 1, 0);
+}
+
 async function restoreTabsFromSnapshot() {
-  const snapshot = loadTabSnapshot();
+  const snapshot = await loadTabSnapshot();
   if (!snapshot) return false;
 
   isRestoringTabs = true;
@@ -443,10 +575,7 @@ async function restoreTabsFromSnapshot() {
     return false;
   }
 
-  let activeIndex = Number(snapshot.activeIndex);
-  if (!Number.isInteger(activeIndex) || activeIndex < 0 || activeIndex >= snapshotTabs.length) {
-    activeIndex = Math.max(snapshotTabs.length - 1, 0);
-  }
+  const activeIndex = resolveSnapshotActiveIndex(snapshot);
 
   try {
     // Restore tab headers in original order, but only active tab starts its session immediately.
@@ -458,7 +587,7 @@ async function restoreTabsFromSnapshot() {
           title: tab.title || '终端',
           manuallyRenamed: !!tab.manuallyRenamed,
           cwd: tab.cwd || null,
-          autoCommand: tab.autoCommand || null,
+          autoCommand: tab.lastCliCommand || tab.autoCommand || null,
           skipDirectoryPrompt: true,
           activate: isActiveTab,
           deferSessionStart: !isActiveTab,
@@ -1150,7 +1279,9 @@ function validateApiBridge() {
     'resizeTerminal',
     'closeTerminal',
     'getSettings',
-    'saveSettings'
+    'saveSettings',
+    'getTabSnapshot',
+    'saveTabSnapshot'
   ];
   const missing = requiredMethods.filter((methodName) => !hasApiMethod(methodName));
   if (missing.length === 0) return;
@@ -1442,7 +1573,14 @@ initializeQuickSettings();
 validateApiBridge();
 validateTerminalRuntime();
 validateUiRuntime();
-window.addEventListener('beforeunload', persistTabSnapshot);
+window.addEventListener('beforeunload', () => {
+  persistTabSnapshot({ immediate: true });
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    persistTabSnapshot({ immediate: true });
+  }
+});
 
 async function bootstrapApp() {
   await loadRuntimeSettings();

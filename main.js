@@ -22,6 +22,7 @@ const HEARTBEAT_MAX_QUERY_LIMIT = 200;
 const HEARTBEAT_DEFAULT_QUERY_DAYS = 14;
 const HEARTBEAT_DEFAULT_QUERY_LIMIT = 40;
 const SESSION_ARCHIVE_DIRNAME = 'session-archive';
+const TAB_STATE_FILENAME = 'tab-state.json';
 const heartbeatRuntime = {
   enabled: true,
   intervalMs: DEFAULT_HEARTBEAT_INTERVAL_MS
@@ -53,6 +54,15 @@ const archiveIndexState = {
     version: 1,
     updatedAt: '',
     sessions: {}
+  }
+};
+const tabStateRuntime = {
+  loaded: false,
+  data: {
+    version: 2,
+    updatedAt: '',
+    activeTabId: '',
+    tabs: []
   }
 };
 let hasAppliedInitialTerminalRelayout = false;
@@ -435,6 +445,122 @@ function sanitizeArchiveLine(value, maxLength) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maxLength);
+}
+
+function createEmptyTabState() {
+  return {
+    version: 2,
+    updatedAt: '',
+    activeTabId: '',
+    tabs: []
+  };
+}
+
+function getTabStatePath() {
+  return path.join(app.getPath('userData'), TAB_STATE_FILENAME);
+}
+
+function normalizeTabState(rawState = {}) {
+  const state = rawState && typeof rawState === 'object' ? rawState : {};
+  const rawTabs = Array.isArray(state.tabs) ? state.tabs : [];
+  const tabs = rawTabs
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+      const tabId = sanitizeArchiveLine(item.tabId || item.id || `tab-${index + 1}`, 80);
+      const title = sanitizeArchiveLine(item.title || '', 120) || '终端';
+      const cwd = sanitizeArchiveLine(item.cwd || '', 640);
+      const lastCliCommand = sanitizeArchiveLine(item.lastCliCommand || item.autoCommand || '', 220);
+      const manuallyRenamed = !!item.manuallyRenamed;
+      return {
+        tabId,
+        title,
+        cwd,
+        lastCliCommand,
+        manuallyRenamed
+      };
+    })
+    .filter(Boolean);
+
+  let activeTabId = sanitizeArchiveLine(state.activeTabId, 80);
+  if (!activeTabId && Number.isInteger(state.activeIndex)) {
+    const fromIndex = tabs[state.activeIndex];
+    activeTabId = fromIndex ? fromIndex.tabId : '';
+  }
+  if (activeTabId && !tabs.some((item) => item.tabId === activeTabId)) {
+    activeTabId = '';
+  }
+  if (!activeTabId && tabs.length > 0) {
+    activeTabId = tabs[tabs.length - 1].tabId;
+  }
+
+  return {
+    version: 2,
+    updatedAt: sanitizeArchiveLine(state.updatedAt, 40),
+    activeTabId,
+    tabs
+  };
+}
+
+function persistTabState() {
+  const statePath = getTabStatePath();
+  const dirPath = path.dirname(statePath);
+  if (!ensureDirSync(dirPath)) return false;
+
+  const payload = {
+    ...tabStateRuntime.data,
+    updatedAt: new Date().toISOString()
+  };
+  const tempPath = `${statePath}.tmp`;
+
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), 'utf8');
+    fs.renameSync(tempPath, statePath);
+    tabStateRuntime.data = payload;
+    tabStateRuntime.loaded = true;
+    return true;
+  } catch (err) {
+    console.warn('[tab-state] Failed to persist snapshot:', err.message);
+    try {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    } catch (cleanupErr) {
+      console.warn('[tab-state] Failed to cleanup temp file:', cleanupErr.message);
+    }
+    return false;
+  }
+}
+
+function loadTabState() {
+  if (tabStateRuntime.loaded) {
+    return tabStateRuntime.data;
+  }
+
+  const statePath = getTabStatePath();
+  if (!fs.existsSync(statePath)) {
+    tabStateRuntime.data = createEmptyTabState();
+    tabStateRuntime.loaded = true;
+    return tabStateRuntime.data;
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    tabStateRuntime.data = normalizeTabState(parsed);
+  } catch (err) {
+    console.warn('[tab-state] Failed to load snapshot, reset to empty state:', err.message);
+    tabStateRuntime.data = createEmptyTabState();
+  }
+  tabStateRuntime.loaded = true;
+  return tabStateRuntime.data;
+}
+
+function saveTabState(snapshotPayload = {}) {
+  const normalized = normalizeTabState(snapshotPayload);
+  tabStateRuntime.data = {
+    ...normalized,
+    updatedAt: new Date().toISOString()
+  };
+  tabStateRuntime.loaded = true;
+  persistTabState();
+  return tabStateRuntime.data;
 }
 
 function canUseAsTerminalCwd(dirPath) {
@@ -1392,6 +1518,20 @@ ipcMain.handle('settings:save', (event, { apiKey, baseUrl, aiCommand, heartbeat 
   return { success: true };
 });
 
+// --- IPC: Tab snapshot persistence ---
+
+ipcMain.handle('tabs:snapshot:get', () => {
+  return loadTabState();
+});
+
+ipcMain.handle('tabs:snapshot:save', (event, payload = {}) => {
+  const snapshot = payload && typeof payload === 'object' && payload.snapshot ? payload.snapshot : payload;
+  return {
+    success: true,
+    snapshot: saveTabState(snapshot || {})
+  };
+});
+
 // --- IPC: Heartbeat archive ---
 
 ipcMain.handle('heartbeat:query', (event, options = {}) => {
@@ -1536,6 +1676,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  persistTabState();
   for (const [tabId, entry] of terminals) {
     markSessionEnded(tabId, entry, 'app_shutdown');
   }
