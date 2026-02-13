@@ -29,6 +29,20 @@ const HEARTBEAT_ERROR_PATTERN = /\b(error|failed|failure|exception|traceback|fat
 const HEARTBEAT_SUCCESS_PATTERN = /\b(done|success|completed|finished)\b|成功|完成|已完成/i;
 const HEARTBEAT_WAITING_PATTERN = /是否继续|请确认|确认\?|are you sure|do you want to continue|yes\/no|y\/n|y\/N|Y\/n|confirm/i;
 const HEARTBEAT_SIGNAL_PATTERNS = [HEARTBEAT_ERROR_PATTERN, HEARTBEAT_SUCCESS_PATTERN, HEARTBEAT_WAITING_PATTERN];
+const CLI_PROVIDER_PATTERNS = [
+  { cli: 'codex', provider: 'openai', pattern: /\bcodex\b|\bopenai\b|\bgpt-[a-z0-9._-]+/i },
+  { cli: 'claude', provider: 'anthropic', pattern: /\bclaude\b|\banthropic\b/i },
+  { cli: 'gemini', provider: 'google', pattern: /\bgemini\b|\bgoogle-ai\b/i },
+  { cli: 'qwen', provider: 'qwen', pattern: /\bqwen\b|\bdashscope\b/i },
+  { cli: 'deepseek', provider: 'deepseek', pattern: /\bdeepseek\b/i }
+];
+const MODEL_TOKEN_PATTERNS = [
+  /\b(gpt-[a-z0-9._-]+)\b/i,
+  /\b(claude-[a-z0-9._-]+)\b/i,
+  /\b(gemini-[a-z0-9._-]+)\b/i,
+  /\b(qwen[-a-z0-9._]+)\b/i,
+  /\b(deepseek[-a-z0-9._]+)\b/i
+];
 const archiveIndexState = {
   loaded: false,
   data: {
@@ -158,6 +172,135 @@ function inferHeartbeatStatusFromText(text) {
   if (HEARTBEAT_WAITING_PATTERN.test(normalized)) return '待输入';
   if (HEARTBEAT_SUCCESS_PATTERN.test(normalized)) return '阶段完成';
   return '进行中';
+}
+
+function parseModelHint(text) {
+  const source = String(text || '').trim();
+  if (!source) return '';
+
+  const modelFlagMatch = source.match(/(?:^|\s)(?:-m|--model)\s+([^\s]+)/i);
+  if (modelFlagMatch && modelFlagMatch[1]) {
+    return modelFlagMatch[1].trim();
+  }
+
+  for (const pattern of MODEL_TOKEN_PATTERNS) {
+    const match = source.match(pattern);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+  }
+
+  return '';
+}
+
+function inferCliProvider(text) {
+  const source = String(text || '').trim();
+  if (!source) {
+    return { cli: 'unknown', provider: 'unknown' };
+  }
+
+  for (const item of CLI_PROVIDER_PATTERNS) {
+    if (item.pattern.test(source)) {
+      return { cli: item.cli, provider: item.provider };
+    }
+  }
+
+  return { cli: 'unknown', provider: 'unknown' };
+}
+
+function createSessionProfileFromHint(hintText, detectedFrom, confidence) {
+  const source = String(hintText || '').trim();
+  const inferred = inferCliProvider(source);
+  const model = parseModelHint(source);
+
+  if (inferred.cli === 'unknown' && !model) return null;
+
+  return {
+    cli: inferred.cli,
+    provider: inferred.provider,
+    model,
+    confidence: clampInteger(confidence, 1, 100, 60),
+    detectedFrom: sanitizeArchiveLine(detectedFrom || 'unknown', 40),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function mergeSessionProfile(currentProfile, nextProfile) {
+  if (!nextProfile) {
+    return currentProfile || {
+      cli: 'unknown',
+      provider: 'unknown',
+      model: '',
+      confidence: 0,
+      detectedFrom: 'unknown',
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  const current = currentProfile || {
+    cli: 'unknown',
+    provider: 'unknown',
+    model: '',
+    confidence: 0,
+    detectedFrom: 'unknown',
+    updatedAt: ''
+  };
+
+  const nextConfidence = clampInteger(nextProfile.confidence, 1, 100, 60);
+  const currentConfidence = clampInteger(current.confidence, 0, 100, 0);
+  const shouldReplace = nextConfidence >= currentConfidence || current.cli === 'unknown';
+
+  const merged = {
+    cli: current.cli,
+    provider: current.provider,
+    model: current.model || '',
+    confidence: currentConfidence,
+    detectedFrom: current.detectedFrom || 'unknown',
+    updatedAt: current.updatedAt || ''
+  };
+
+  if (shouldReplace) {
+    if (nextProfile.cli && nextProfile.cli !== 'unknown') merged.cli = nextProfile.cli;
+    if (nextProfile.provider && nextProfile.provider !== 'unknown') merged.provider = nextProfile.provider;
+    merged.confidence = nextConfidence;
+    merged.detectedFrom = sanitizeArchiveLine(nextProfile.detectedFrom || merged.detectedFrom, 40) || 'unknown';
+    merged.updatedAt = new Date().toISOString();
+  }
+
+  if (nextProfile.model) {
+    merged.model = sanitizeArchiveLine(nextProfile.model, 80);
+    if (!shouldReplace) {
+      merged.updatedAt = new Date().toISOString();
+    }
+  }
+
+  return merged;
+}
+
+function ensureSessionProfile(entry, autoCommandHint = '') {
+  if (!entry) return null;
+  const fromStored = entry.sessionProfile;
+  if (fromStored && typeof fromStored === 'object') return fromStored;
+
+  const initial = mergeSessionProfile(null, createSessionProfileFromHint(autoCommandHint, 'auto_command', 90));
+  entry.sessionProfile = initial;
+  return initial;
+}
+
+function updateSessionProfileFromHint(entry, hintText, detectedFrom, confidence) {
+  if (!entry) return;
+  const next = createSessionProfileFromHint(hintText, detectedFrom, confidence);
+  if (!next) return;
+  entry.sessionProfile = mergeSessionProfile(ensureSessionProfile(entry, entry.autoCommand), next);
+}
+
+function buildTopicAnalysisContext(entry) {
+  if (!entry) return {};
+  const profile = ensureSessionProfile(entry, entry.autoCommand);
+  return {
+    aiCommand: entry.autoCommand || '',
+    sessionProfile: profile
+  };
 }
 
 function clampInteger(value, min, max, fallback) {
@@ -343,6 +486,9 @@ function upsertArchiveIndex(entry, patch = {}) {
     tabId: entry.tabId || existing.tabId || '',
     cwd: entry.cwd || existing.cwd || '',
     isAiSession: !!entry.isAiSession,
+    cli: (entry.sessionProfile && entry.sessionProfile.cli) || existing.cli || '',
+    provider: (entry.sessionProfile && entry.sessionProfile.provider) || existing.provider || '',
+    model: (entry.sessionProfile && entry.sessionProfile.model) || existing.model || '',
     startedAt: entry.sessionStartedAt || existing.startedAt || new Date().toISOString(),
     endedAt: patch.endedAt !== undefined ? patch.endedAt : (existing.endedAt || null),
     lastAt: patch.lastAt || existing.lastAt || new Date().toISOString(),
@@ -374,6 +520,9 @@ function appendHeartbeatArchiveRecord(tabId, entry, eventType, payload = {}) {
   const status = sanitizeArchiveLine(payload.status, 40) || inferHeartbeatStatusFromText(`${summary}\n${analysis}`);
   const reason = sanitizeArchiveLine(payload.reason, 40);
   const source = sanitizeArchiveLine(payload.source, 40) || 'heartbeat';
+  const cli = sanitizeArchiveLine(payload.cli || (entry.sessionProfile && entry.sessionProfile.cli), 40);
+  const provider = sanitizeArchiveLine(payload.provider || (entry.sessionProfile && entry.sessionProfile.provider), 40);
+  const model = sanitizeArchiveLine(payload.model || (entry.sessionProfile && entry.sessionProfile.model), 80);
 
   const record = {
     ts: nowIso,
@@ -387,6 +536,9 @@ function appendHeartbeatArchiveRecord(tabId, entry, eventType, payload = {}) {
     summary,
     analysis
   };
+  if (cli) record.cli = cli;
+  if (provider) record.provider = provider;
+  if (model) record.model = model;
 
   try {
     fs.appendFileSync(entry.archiveFilePath, `${JSON.stringify(record)}\n`, 'utf8');
@@ -600,7 +752,7 @@ async function runHeartbeat(tabId, entry, options = {}) {
   entry.heartbeatInFlight = true;
   try {
     const activityMark = entry.activitySeq;
-    const report = await topicDetector.analyzeHeartbeat(signature);
+    const report = await topicDetector.analyzeHeartbeat(signature, buildTopicAnalysisContext(entry));
     const heartbeatStatus = inferHeartbeatStatusFromText(`${report.summary || ''}\n${report.analysis || ''}`);
 
     entry.lastHeartbeatSignature = signature;
@@ -612,7 +764,10 @@ async function runHeartbeat(tabId, entry, options = {}) {
       analysis: report.analysis || '请继续查看最新输出。',
       reason,
       source: 'background',
-      status: heartbeatStatus
+      status: heartbeatStatus,
+      cli: entry.sessionProfile && entry.sessionProfile.cli,
+      provider: entry.sessionProfile && entry.sessionProfile.provider,
+      model: entry.sessionProfile && entry.sessionProfile.model
     });
 
     if (win && !win.isDestroyed()) {
@@ -800,6 +955,7 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     buffer: '',
     alive: true,
     isAiSession: !!autoCommand,
+    autoCommand: String(autoCommand || '').trim(),
     cwd: resolvedCwd,
     tabId,
     sessionId: createSessionId(tabId),
@@ -814,15 +970,20 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     heartbeatDebounceTimer: null,
     lastHeartbeatSignature: '',
     lastHeartbeatAt: 0,
-    lastHeartbeatReport: null
+    lastHeartbeatReport: null,
+    sessionProfile: null
   };
+  entry.sessionProfile = ensureSessionProfile(entry, entry.autoCommand);
   terminals.set(tabId, entry);
   startHeartbeat(tabId, entry);
   appendHeartbeatArchiveRecord(tabId, entry, 'session_start', {
     summary: '会话已启动',
     analysis: `工作目录：${sanitizeArchiveLine(resolvedCwd, 160) || '默认目录'}${cwdResolution.fallbackApplied ? '（已自动回退）' : ''}`,
     reason: entry.isAiSession ? 'ai_session' : 'terminal_session',
-    source: 'system'
+    source: 'system',
+    cli: entry.sessionProfile && entry.sessionProfile.cli,
+    provider: entry.sessionProfile && entry.sessionProfile.provider,
+    model: entry.sessionProfile && entry.sessionProfile.model
   });
 
   ptyProcess.onData((data) => {
@@ -839,6 +1000,7 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     if (plain.trim()) {
       entry.activitySeq += 1;
       entry.lastOutputAt = Date.now();
+      updateSessionProfileFromHint(entry, plain.slice(-300), 'terminal_output', 70);
       if (hasHeartbeatSignal(plain)) {
         scheduleHeartbeatFromSignal(tabId, entry);
       }
@@ -905,6 +1067,7 @@ ipcMain.on('terminal:data', (event, { tabId, data }) => {
     if ((data || '').trim()) {
       entry.activitySeq += 1;
       entry.lastUserInputAt = Date.now();
+      updateSessionProfileFromHint(entry, String(data).slice(-240), 'user_input', 80);
     }
     entry.pty.write(data);
   }
@@ -936,7 +1099,11 @@ ipcMain.handle('terminal:close', (event, { tabId }) => {
 ipcMain.handle('topic:refresh', async () => {
   const tabBuffers = [];
   for (const [tabId, entry] of terminals) {
-    tabBuffers.push({ tabId, buffer: entry.buffer });
+    tabBuffers.push({
+      tabId,
+      buffer: entry.buffer,
+      context: buildTopicAnalysisContext(entry)
+    });
   }
 
   try {
