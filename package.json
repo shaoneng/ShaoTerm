@@ -1,6 +1,6 @@
 {
   "name": "shaoterm",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "ShaoTerm: AI coding CLI multi-session manager with smart tab naming",
   "author": "shaoneng",
   "main": "main.js",
@@ -33,7 +33,7 @@
       "target": [
         "dmg"
       ],
-      "icon": "build/icon.icns",
+      "icon": "assets/icon.icns",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "win": {
@@ -45,7 +45,7 @@
           ]
         }
       ],
-      "icon": "build/icon.ico",
+      "icon": "assets/icon.ico",
       "artifactName": "${productName}-${version}-Setup.${ext}"
     },
     "nsis": {
