@@ -15,6 +15,7 @@ const HEARTBEAT_MIN_CHARS = 80;
 const HEARTBEAT_CONTEXT_TAIL_CHARS = 2600;
 const HEARTBEAT_SIGNAL_DEBOUNCE_MS = 3000;
 const HEARTBEAT_NOTIFY_COOLDOWN_MS = 45000;
+const HEARTBEAT_INITIAL_DELAY_MS = 60 * 1000;
 const HEARTBEAT_ARCHIVE_RETENTION_DAYS = 30;
 const HEARTBEAT_MAX_QUERY_DAYS = 90;
 const HEARTBEAT_MAX_QUERY_LIMIT = 200;
@@ -51,6 +52,7 @@ const archiveIndexState = {
     sessions: {}
   }
 };
+let hasAppliedInitialTerminalRelayout = false;
 
 function toUnpackedPath(filePath) {
   return filePath
@@ -699,6 +701,27 @@ function queryHeartbeatArchive(options = {}) {
 async function summarizeHeartbeatArchive(options = {}) {
   const result = queryHeartbeatArchive(options);
   if (result.records.length === 0) {
+    const requestedTabId = sanitizeArchiveLine(options.tabId, 80);
+    if (requestedTabId) {
+      const entry = terminals.get(requestedTabId);
+      if (entry && entry.alive) {
+        const signature = createHeartbeatSignature(entry.buffer);
+        if (signature.length > 0) {
+          try {
+            const report = await topicDetector.analyzeHeartbeat(signature, buildTopicAnalysisContext(entry));
+            return {
+              ...result,
+              summary: report.summary || '已基于当前会话输出生成总结',
+              analysis: report.analysis || '会话处于进行中，请继续观察后续输出。',
+              liveSnapshot: true
+            };
+          } catch (err) {
+            console.warn('[heartbeat-archive] Live snapshot summarize failed:', err.message);
+          }
+        }
+      }
+    }
+
     return {
       ...result,
       summary: '当前查询范围暂无会话归档',
@@ -743,7 +766,8 @@ async function runHeartbeat(tabId, entry, options = {}) {
 
   const signature = createHeartbeatSignature(entry.buffer);
   const hasSignal = hasHeartbeatSignal(signature);
-  if (signature.length < HEARTBEAT_MIN_CHARS && !hasSignal) return;
+  const isFirstHeartbeat = !entry.lastHeartbeatReport;
+  if (signature.length < HEARTBEAT_MIN_CHARS && !hasSignal && !isFirstHeartbeat) return;
   if (signature === entry.lastHeartbeatSignature && !hasSignal) return;
   if (reason !== 'interval' && now - (entry.lastHeartbeatAt || 0) < HEARTBEAT_NOTIFY_COOLDOWN_MS && !hasSignal) {
     return;
@@ -798,12 +822,22 @@ function stopHeartbeat(entry) {
     clearTimeout(entry.heartbeatDebounceTimer);
     entry.heartbeatDebounceTimer = null;
   }
+  if (entry.heartbeatInitialTimer) {
+    clearTimeout(entry.heartbeatInitialTimer);
+    entry.heartbeatInitialTimer = null;
+  }
   entry.heartbeatInFlight = false;
 }
 
 function startHeartbeat(tabId, entry) {
   stopHeartbeat(entry);
   if (!heartbeatRuntime.enabled) return;
+  entry.heartbeatInitialTimer = setTimeout(() => {
+    entry.heartbeatInitialTimer = null;
+    runHeartbeat(tabId, entry, { reason: 'startup' }).catch((err) => {
+      console.warn(`[heartbeat] Initial run failed for tab ${tabId}:`, err.message);
+    });
+  }, HEARTBEAT_INITIAL_DELAY_MS);
   entry.heartbeatTimer = setInterval(() => {
     runHeartbeat(tabId, entry, { reason: 'interval' }).catch((err) => {
       console.warn(`[heartbeat] Unexpected error for tab ${tabId}:`, err.message);
@@ -918,8 +952,12 @@ ipcMain.handle('notify:info', async (event, { title, body }) => {
 
 // --- IPC: Terminal management ---
 
-ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
+ipcMain.handle('terminal:create', (event, payload = {}) => {
+  const { tabId, cwd, autoCommand } = payload;
+  const options = payload && typeof payload.options === 'object' ? payload.options : {};
   const shell = process.env.SHELL || '/bin/zsh';
+  const shellMode = sanitizeArchiveLine(options.shellMode, 20).toLowerCase();
+  const autoRunCommand = options.autoRunCommand !== false;
   const cwdResolution = resolveTerminalCwd(cwd);
   const resolvedCwd = cwdResolution.resolvedCwd;
   const autoCommandPreview = String(autoCommand || '')
@@ -936,7 +974,21 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
   }
   let ptyProcess;
   try {
-    ptyProcess = pty.spawn(shell, ['-l'], {
+    const shellArgs = [];
+    const lowerShell = shell.toLowerCase();
+    if (shellMode === 'fast') {
+      if (lowerShell.endsWith('/zsh') || lowerShell === 'zsh') {
+        shellArgs.push('-f');
+      } else if (lowerShell.endsWith('/bash') || lowerShell === 'bash') {
+        shellArgs.push('--noprofile', '--norc');
+      } else {
+        shellArgs.push('-l');
+      }
+    } else {
+      shellArgs.push('-l');
+    }
+
+    ptyProcess = pty.spawn(shell, shellArgs, {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
@@ -968,6 +1020,7 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
     heartbeatInFlight: false,
     heartbeatTimer: null,
     heartbeatDebounceTimer: null,
+    heartbeatInitialTimer: null,
     lastHeartbeatSignature: '',
     lastHeartbeatAt: 0,
     lastHeartbeatReport: null,
@@ -1031,7 +1084,7 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
   });
 
   // Auto-run command after shell initializes (if specified)
-  if (autoCommand) {
+  if (autoCommand && autoRunCommand) {
     setTimeout(() => {
       if (entry.alive) {
         ptyProcess.write(autoCommand + '\r');
@@ -1042,7 +1095,8 @@ ipcMain.handle('terminal:create', (event, { tabId, cwd, autoCommand }) => {
   // Workaround: nudge window size to force xterm.js relayout.
   // xterm.js in Electron sometimes doesn't calculate dimensions correctly
   // on first render; a tiny resize triggers proper recalculation.
-  if (win && !win.isDestroyed()) {
+  if (win && !win.isDestroyed() && !hasAppliedInitialTerminalRelayout) {
+    hasAppliedInitialTerminalRelayout = true;
     const [w, h] = win.getSize();
     win.setSize(w + 1, h + 1);
     setTimeout(() => {
@@ -1135,7 +1189,13 @@ ipcMain.handle('topic:refresh', async (event, options = {}) => {
         });
       }
     }
-    return { success: true };
+    return {
+      success: true,
+      results: results.map((item) => ({
+        tabId: String(item.tabId || ''),
+        topic: String(item.topic || '新对话')
+      }))
+    };
   } catch (err) {
     for (const { tabId } of tabBuffers) {
       if (win && !win.isDestroyed()) {

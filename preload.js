@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   notifyInfo: (title, body) => ipcRenderer.invoke('notify:info', { title, body }),
 
   // Terminal operations
-  createTerminal: (tabId, cwd, autoCommand) => ipcRenderer.invoke('terminal:create', { tabId, cwd, autoCommand }),
+  createTerminal: (tabId, cwd, autoCommand, options) => ipcRenderer.invoke('terminal:create', { tabId, cwd, autoCommand, options: options || {} }),
   sendTerminalData: (tabId, data) => ipcRenderer.send('terminal:data', { tabId, data }),
   resizeTerminal: (tabId, cols, rows) => ipcRenderer.send('terminal:resize', { tabId, cols, rows }),
   closeTerminal: (tabId) => ipcRenderer.invoke('terminal:close', { tabId }),

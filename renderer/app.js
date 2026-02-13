@@ -119,7 +119,7 @@ const terminalManager = (() => {
   console.warn('TerminalManager global is missing, fallback to stub manager.');
   return createFallbackTerminalManager();
 })();
-const tabs = []; // { id, title, manuallyRenamed, cwd, autoCommand, heartbeatStatus, heartbeatSummary, heartbeatAnalysis, heartbeatAt }
+const tabs = []; // { id, title, manuallyRenamed, cwd, autoCommand, heartbeatStatus, heartbeatSummary, heartbeatAnalysis, heartbeatAt, sessionReady, sessionState, sessionStartPromise, pendingAutoCommand }
 const pendingTopicRefreshTabs = new Set();
 let activeTabId = null;
 let inAppNoticeContainer = null;
@@ -153,6 +153,8 @@ let aiCommand = 'codex';
 const HEARTBEAT_INTERVAL_OPTIONS = ['5', '10', '15', '30'];
 const TERMINAL_BOTTOM_SNAP_LINES = 2;
 const TERMINAL_CREATE_TIMEOUT_MS = 12000;
+const STARTUP_PHASE_DELAY_MS = 0;
+const STARTUP_FAST_SHELL_MODE = 'fast';
 const HEARTBEAT_STATUS_TEXT = {
   unknown: '暂无心跳',
   running: '进行中',
@@ -417,21 +419,36 @@ async function restoreTabsFromSnapshot() {
 
   isRestoringTabs = true;
   let restoredCount = 0;
+  const snapshotTabs = Array.isArray(snapshot.tabs) ? snapshot.tabs : [];
+  if (snapshotTabs.length === 0) {
+    isRestoringTabs = false;
+    return false;
+  }
+
+  let activeIndex = Number(snapshot.activeIndex);
+  if (!Number.isInteger(activeIndex) || activeIndex < 0 || activeIndex >= snapshotTabs.length) {
+    activeIndex = Math.max(snapshotTabs.length - 1, 0);
+  }
 
   try {
-    for (const tab of snapshot.tabs) {
+    // Restore tab headers in original order, but only active tab starts its session immediately.
+    for (let i = 0; i < snapshotTabs.length; i += 1) {
+      const tab = snapshotTabs[i];
+      const isActiveTab = i === activeIndex;
       try {
         const restoredId = await createNewTab({
           title: tab.title || '终端',
           manuallyRenamed: !!tab.manuallyRenamed,
           cwd: tab.cwd || null,
           autoCommand: tab.autoCommand || null,
-          skipDirectoryPrompt: true
+          skipDirectoryPrompt: true,
+          activate: isActiveTab,
+          deferSessionStart: !isActiveTab,
+          deferAutoRun: true,
+          deferPendingCommandFlush: true,
+          shellMode: STARTUP_FAST_SHELL_MODE
         });
-
-        if (restoredId) {
-          restoredCount += 1;
-        }
+        if (restoredId) restoredCount += 1;
       } catch (tabErr) {
         console.warn('Failed to restore one tab from snapshot:', tabErr, tab);
       }
@@ -446,7 +463,6 @@ async function restoreTabsFromSnapshot() {
     return false;
   }
 
-  const activeIndex = Number(snapshot.activeIndex);
   if (Number.isInteger(activeIndex) && activeIndex >= 0 && activeIndex < tabs.length) {
     switchToTabById(tabs[activeIndex].id);
   } else if (tabs.length > 0) {
@@ -463,10 +479,35 @@ function ensureFailureWrapper(tabId, existingWrapper) {
   }
 
   const wrapper = document.createElement('div');
-  wrapper.className = 'terminal-wrapper active';
+  wrapper.className = 'terminal-wrapper';
   wrapper.dataset.tabId = tabId;
   terminalContainer.appendChild(wrapper);
   return wrapper;
+}
+
+function getTabDataById(tabId) {
+  return tabs.find((t) => t.id === tabId) || null;
+}
+
+function getTabWrapper(tabId) {
+  return terminalContainer.querySelector(`.terminal-wrapper[data-tab-id="${tabId}"]`);
+}
+
+function setActiveTabVisual(tabId) {
+  tabBar.querySelectorAll('.tab').forEach((el) => {
+    el.classList.toggle('active', el.dataset.tabId === tabId);
+  });
+  terminalContainer.querySelectorAll('.terminal-wrapper').forEach((el) => {
+    el.classList.toggle('active', el.dataset.tabId === tabId);
+  });
+}
+
+async function runPendingAutoCommandIfNeeded(tabData) {
+  if (!tabData || !tabData.sessionReady) return;
+  const pendingCommand = String(tabData.pendingAutoCommand || '').trim();
+  if (!pendingCommand) return;
+  tabData.pendingAutoCommand = '';
+  window.api.sendTerminalData(tabData.id, `${pendingCommand}\r`);
 }
 
 function renderSessionFailureState(tabId, wrapper, title, detail) {
@@ -502,10 +543,134 @@ function renderSessionFailureState(tabId, wrapper, title, detail) {
   persistTabSnapshot();
 }
 
+async function ensureTabSessionReady(tabData, options = {}) {
+  if (!tabData) return false;
+  if (tabData.sessionReady) {
+    if (options.runPendingCommand !== false) {
+      await runPendingAutoCommandIfNeeded(tabData);
+    }
+    return true;
+  }
+  if (tabData.sessionStartPromise) {
+    const ready = await tabData.sessionStartPromise;
+    if (ready && options.runPendingCommand !== false) {
+      await runPendingAutoCommandIfNeeded(tabData);
+    }
+    return !!ready;
+  }
+
+  const tabId = tabData.id;
+  const wrapper = ensureFailureWrapper(tabId, getTabWrapper(tabId));
+  wrapper.innerHTML = '';
+  tabData.sessionState = 'starting';
+
+  const startPromise = (async () => {
+    let cols = 80;
+    let rows = 24;
+    try {
+      const size = terminalManager.create(tabId, wrapper);
+      cols = size.cols;
+      rows = size.rows;
+    } catch (err) {
+      console.warn('Failed to initialize terminal view:', err);
+      tabData.sessionState = 'error';
+      renderSessionFailureState(
+        tabId,
+        wrapper,
+        '终端加载失败',
+        `终端渲染组件初始化失败：${formatErrorDetail(err, '请重启应用后重试。')}`
+      );
+      return false;
+    }
+
+    let createResult = null;
+    try {
+      createResult = await withTimeout(
+        window.api.createTerminal(
+          tabId,
+          tabData.cwd,
+          tabData.autoCommand || null,
+          {
+            shellMode: options.shellMode || tabData.shellMode || '',
+            autoRunCommand: options.autoRunCommand !== false
+          }
+        ),
+        TERMINAL_CREATE_TIMEOUT_MS,
+        `终端创建超时（>${Math.round(TERMINAL_CREATE_TIMEOUT_MS / 1000)} 秒）`
+      );
+    } catch (err) {
+      console.warn('Failed to create terminal session:', err);
+      tabData.sessionState = 'error';
+      terminalManager.destroy(tabId);
+      if (hasApiMethod('closeTerminal')) {
+        window.api.closeTerminal(tabId).catch((closeErr) => {
+          console.warn('Failed to cleanup timed-out/failed terminal session:', closeErr);
+        });
+      }
+      renderSessionFailureState(
+        tabId,
+        wrapper,
+        '会话创建失败',
+        `无法创建终端会话：${formatErrorDetail(err)}`
+      );
+      return false;
+    }
+
+    if (createResult && createResult.resolvedCwd) {
+      tabData.cwd = createResult.resolvedCwd;
+      renderTabLabel(tabId);
+    }
+    if (createResult && createResult.cwdFallbackApplied) {
+      const requestedPath = String(createResult.requestedCwd || '').trim();
+      const fallbackPath = String(createResult.resolvedCwd || '').trim();
+      const fallbackMessage = requestedPath
+        ? `目录不可用，已自动切换到：${fallbackPath}`
+        : `未提供目录，已使用默认目录：${fallbackPath}`;
+      showInAppNotice('目录已自动回退', fallbackMessage);
+    }
+
+    tabData.sessionReady = true;
+    tabData.sessionState = 'running';
+    tabData.shellMode = '';
+    updateTabHeartbeatMeta(tabId, {
+      status: 'running',
+      summary: '会话已启动',
+      analysis: tabData.cwd ? `工作目录：${tabData.cwd}` : '',
+      at: new Date().toISOString()
+    });
+
+    if (options.autoRunCommand === false && tabData.autoCommand) {
+      tabData.pendingAutoCommand = tabData.autoCommand;
+    }
+
+    window.api.resizeTerminal(tabId, cols, rows);
+    if (activeTabId === tabId) {
+      terminalManager.focus(tabId);
+    }
+
+    return true;
+  })();
+
+  tabData.sessionStartPromise = startPromise;
+  const ready = await startPromise;
+  tabData.sessionStartPromise = null;
+
+  if (ready && options.runPendingCommand !== false) {
+    await runPendingAutoCommandIfNeeded(tabData);
+  }
+
+  syncScrollBottomButton();
+  persistTabSnapshot();
+  return !!ready;
+}
+
 async function createNewTab(options = {}) {
   try {
     const resolvedOptions = typeof options === 'string' ? { autoCommand: options } : (options || {});
     const skipDirectoryPrompt = !!resolvedOptions.skipDirectoryPrompt;
+    const shouldActivate = resolvedOptions.activate !== false;
+    const deferSessionStart = !!resolvedOptions.deferSessionStart;
+    const deferAutoRun = !!resolvedOptions.deferAutoRun;
     const autoCommand = resolvedOptions.autoCommand ? normalizeAiCommand(resolvedOptions.autoCommand) : null;
     let cwd = resolvedOptions.cwd || null;
     let dirName = resolvedOptions.title || '终端';
@@ -527,6 +692,11 @@ async function createNewTab(options = {}) {
       manuallyRenamed: !!resolvedOptions.manuallyRenamed,
       cwd,
       autoCommand,
+      shellMode: String(resolvedOptions.shellMode || '').trim(),
+      sessionReady: false,
+      sessionState: deferSessionStart ? 'dormant' : 'starting',
+      sessionStartPromise: null,
+      pendingAutoCommand: deferAutoRun && autoCommand ? autoCommand : '',
       heartbeatStatus: 'unknown',
       heartbeatSummary: '',
       heartbeatAnalysis: '',
@@ -586,77 +756,31 @@ async function createNewTab(options = {}) {
     wrapper.dataset.tabId = tabId;
     terminalContainer.appendChild(wrapper);
 
-    // Make visible before creating xterm
-    activeTabId = tabId;
-    tabBar.querySelectorAll('.tab').forEach((el) => {
-      el.classList.toggle('active', el.dataset.tabId === tabId);
-    });
-    terminalContainer.querySelectorAll('.terminal-wrapper').forEach((el) => {
-      el.classList.toggle('active', el.dataset.tabId === tabId);
-    });
-
-    let cols = 80;
-    let rows = 24;
-    try {
-      const size = terminalManager.create(tabId, wrapper);
-      cols = size.cols;
-      rows = size.rows;
-    } catch (err) {
-      console.warn('Failed to initialize terminal view:', err);
-      renderSessionFailureState(
-        tabId,
-        wrapper,
-        '终端加载失败',
-        `终端渲染组件初始化失败：${formatErrorDetail(err, '请重启应用后重试。')}`
-      );
-      return tabId;
+    if (shouldActivate) {
+      activeTabId = tabId;
+      setActiveTabVisual(tabId);
+    } else {
+      setActiveTabVisual(activeTabId);
     }
 
-    let createResult = null;
-    try {
-      createResult = await withTimeout(
-        window.api.createTerminal(tabId, cwd, autoCommand || null),
-        TERMINAL_CREATE_TIMEOUT_MS,
-        `终端创建超时（>${Math.round(TERMINAL_CREATE_TIMEOUT_MS / 1000)} 秒）`
-      );
-    } catch (err) {
-      console.warn('Failed to create terminal session:', err);
-      terminalManager.destroy(tabId);
-      if (hasApiMethod('closeTerminal')) {
-        window.api.closeTerminal(tabId).catch((closeErr) => {
-          console.warn('Failed to cleanup timed-out/failed terminal session:', closeErr);
-        });
-      }
-      const failedWrapper = ensureFailureWrapper(tabId, null);
-      renderSessionFailureState(
-        tabId,
-        failedWrapper,
-        '会话创建失败',
-        `无法创建终端会话：${formatErrorDetail(err)}`
-      );
-      return tabId;
+    if (!deferSessionStart) {
+      await ensureTabSessionReady(tabData, {
+        autoRunCommand: !deferAutoRun,
+        shellMode: tabData.shellMode,
+        runPendingCommand: shouldActivate && !resolvedOptions.deferPendingCommandFlush
+      });
+    } else if (tabData.pendingAutoCommand) {
+      updateTabHeartbeatMeta(tabId, {
+        status: 'running',
+        summary: '会话待激活',
+        analysis: '切换到该标签后将启动终端并继续会话。',
+        at: new Date().toISOString()
+      });
     }
 
-    if (createResult && createResult.resolvedCwd) {
-      tabData.cwd = createResult.resolvedCwd;
-      renderTabLabel(tabId);
+    if (shouldActivate && tabData.sessionReady) {
+      terminalManager.focus(tabId);
     }
-    if (createResult && createResult.cwdFallbackApplied) {
-      const requestedPath = String(createResult.requestedCwd || '').trim();
-      const fallbackPath = String(createResult.resolvedCwd || '').trim();
-      const fallbackMessage = requestedPath
-        ? `目录不可用，已自动切换到：${fallbackPath}`
-        : `未提供目录，已使用默认目录：${fallbackPath}`;
-      showInAppNotice('目录已自动回退', fallbackMessage);
-    }
-    updateTabHeartbeatMeta(tabId, {
-      status: 'running',
-      summary: '会话已启动',
-      analysis: tabData.cwd ? `工作目录：${tabData.cwd}` : '',
-      at: new Date().toISOString()
-    });
-    window.api.resizeTerminal(tabId, cols, rows);
-    terminalManager.focus(tabId);
     syncScrollBottomButton();
     persistTabSnapshot();
     return tabId;
@@ -672,17 +796,33 @@ async function createNewAiTab() {
 }
 
 function switchToTabById(tabId) {
-  if (!tabs.some((tab) => tab.id === tabId)) return;
+  const tabData = getTabDataById(tabId);
+  if (!tabData) return;
   activeTabId = tabId;
-  tabBar.querySelectorAll('.tab').forEach((el) => {
-    el.classList.toggle('active', el.dataset.tabId === tabId);
-  });
-  terminalContainer.querySelectorAll('.terminal-wrapper').forEach((el) => {
-    el.classList.toggle('active', el.dataset.tabId === tabId);
-  });
+  setActiveTabVisual(tabId);
   requestAnimationFrame(() => {
-    terminalManager.focus(tabId);
-    syncScrollBottomButton();
+    Promise.resolve()
+      .then(async () => {
+        if (!tabData.sessionReady) {
+          const shouldAutoRunAtCreate = !String(tabData.pendingAutoCommand || '').trim();
+          await ensureTabSessionReady(tabData, {
+            autoRunCommand: shouldAutoRunAtCreate,
+            shellMode: tabData.shellMode,
+            runPendingCommand: true
+          });
+        } else {
+          await runPendingAutoCommandIfNeeded(tabData);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to activate tab session:', err);
+      })
+      .finally(() => {
+        if (tabData.sessionReady) {
+          terminalManager.focus(tabId);
+        }
+        syncScrollBottomButton();
+      });
   });
   persistTabSnapshot();
 }
@@ -810,10 +950,29 @@ async function refreshAllTopics() {
     return;
   }
 
+  const ready = await ensureTabSessionReady(targetTab, {
+    autoRunCommand: !String(targetTab.pendingAutoCommand || '').trim(),
+    shellMode: targetTab.shellMode,
+    runPendingCommand: true
+  });
+  if (!ready) {
+    showInAppNotice('刷新会话分析失败', '当前会话未就绪，无法刷新标题。');
+    return;
+  }
+
   pendingTopicRefreshTabs.add(targetTabId);
   updateTabTitle(targetTabId, '分析中...', true);
 
   const result = await window.api.refreshTopics({ tabId: targetTabId });
+  if (result && Array.isArray(result.results)) {
+    const hit = result.results.find((item) => String(item.tabId || '') === targetTabId);
+    if (hit && String(hit.topic || '').trim()) {
+      updateTabTitle(targetTabId, String(hit.topic).trim(), false);
+      pendingTopicRefreshTabs.delete(targetTabId);
+      return;
+    }
+  }
+
   if (!result || result.success !== true) {
     pendingTopicRefreshTabs.delete(targetTabId);
     const reason = result && result.error ? String(result.error) : '未知错误';
@@ -1070,14 +1229,18 @@ async function showHeartbeatArchiveDigestForActiveTab() {
       limit: 30
     });
 
-    if (!result || !Array.isArray(result.records) || result.records.length === 0) {
+    const hasRecords = !!(result && Array.isArray(result.records) && result.records.length > 0);
+    const hasLiveSnapshot = !!(result && result.liveSnapshot);
+    if (!hasRecords && !hasLiveSnapshot) {
       showInAppNotice('心跳归档', `会话“${tabTitle}”暂无可用归档记录。`);
       return;
     }
 
     const summary = (result.summary || '已提取会话归档摘要').replace(/\s+/g, ' ').trim();
     const analysis = (result.analysis || '').replace(/\s+/g, ' ').trim();
-    const stats = `提取 ${result.records.length}/${result.total} 条记录`;
+    const stats = hasRecords
+      ? `提取 ${result.records.length}/${result.total} 条记录`
+      : '基于当前会话输出即时总结';
     const message = analysis ? `${summary}\n${analysis}\n${stats}` : `${summary}\n${stats}`;
     showNonBlockingNotice(`归档总结 · ${tabTitle}`, message);
   } catch (err) {
@@ -1259,15 +1422,17 @@ window.addEventListener('beforeunload', persistTabSnapshot);
 
 async function bootstrapApp() {
   await loadRuntimeSettings();
+  await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, STARTUP_PHASE_DELAY_MS)));
+
   const restored = await restoreTabsFromSnapshot();
-  if (!restored) {
-    const aiTabId = await createNewAiTab();
-    if (!aiTabId) {
-      const terminalTabId = await createNewTab();
-      if (!terminalTabId) {
-        showInAppNotice('会话初始化失败', '请点击“+”或“AI+”重新创建会话。');
-      }
-    }
+  if (restored) return;
+
+  const aiTabId = await createNewAiTab();
+  if (aiTabId) return;
+
+  const terminalTabId = await createNewTab();
+  if (!terminalTabId) {
+    showInAppNotice('会话初始化失败', '请点击“+”或“AI+”重新创建会话。');
   }
 }
 
