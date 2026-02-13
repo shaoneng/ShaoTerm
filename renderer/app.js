@@ -190,11 +190,41 @@ function formatHeartbeatTooltip(tabData) {
   const at = formatHeartbeatTime(tabData.heartbeatAt);
   const summary = String(tabData.heartbeatSummary || '').trim();
   const analysis = String(tabData.heartbeatAnalysis || '').trim();
+  const cwd = String(tabData.cwd || '').trim();
   const lines = [];
+  if (cwd) lines.push(`目录：${cwd}`);
   lines.push(`心跳：${status}${at ? ` · ${at}` : ''}`);
   if (summary) lines.push(`总结：${summary}`);
   if (analysis) lines.push(`分析：${analysis}`);
   return lines.join('\n');
+}
+
+function getTabFolderName(tabData) {
+  const cwd = String((tabData && tabData.cwd) || '').trim();
+  if (!cwd) return '';
+  const parts = cwd.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || cwd;
+}
+
+function renderTabLabel(tabId, analyzing = false) {
+  const tabData = tabs.find((t) => t.id === tabId);
+  if (!tabData) return;
+  const tabEl = tabBar.querySelector(`.tab[data-tab-id="${tabId}"]`);
+  if (!tabEl) return;
+
+  const titleSpan = tabEl.querySelector('.tab-title');
+  if (titleSpan) {
+    titleSpan.textContent = tabData.title;
+    titleSpan.classList.toggle('analyzing', !!analyzing);
+  }
+
+  const folderSpan = tabEl.querySelector('.tab-folder');
+  if (folderSpan) {
+    const folderName = getTabFolderName(tabData);
+    const shouldShowFolder = !!folderName && folderName !== tabData.title;
+    folderSpan.textContent = folderName;
+    folderSpan.classList.toggle('hidden', !shouldShowFolder);
+  }
 }
 
 function renderTabHeartbeat(tabId) {
@@ -515,15 +545,20 @@ async function createNewTab(options = {}) {
     titleSpan.className = 'tab-title';
     titleSpan.textContent = tabData.title;
 
+    const folderSpan = document.createElement('span');
+    folderSpan.className = 'tab-folder hidden';
+
     const closeBtn = document.createElement('span');
     closeBtn.className = 'tab-close';
     closeBtn.textContent = '\u00d7';
 
     tabEl.appendChild(heartbeatDot);
     tabEl.appendChild(titleSpan);
+    tabEl.appendChild(folderSpan);
     tabEl.appendChild(closeBtn);
     // Insert before both add buttons
     tabBar.insertBefore(tabEl, btnAddTerminal);
+    renderTabLabel(tabId);
     renderTabHeartbeat(tabId);
 
     tabEl.addEventListener('click', (e) => {
@@ -603,6 +638,7 @@ async function createNewTab(options = {}) {
 
     if (createResult && createResult.resolvedCwd) {
       tabData.cwd = createResult.resolvedCwd;
+      renderTabLabel(tabId);
     }
     if (createResult && createResult.cwdFallbackApplied) {
       const requestedPath = String(createResult.requestedCwd || '').trim();
@@ -742,6 +778,7 @@ function startRename(tabEl, tabData) {
       startRename(tabEl, tabData);
     });
     input.replaceWith(newSpan);
+    renderTabLabel(tabData.id, false);
     persistTabSnapshot();
   };
 
@@ -773,14 +810,7 @@ function updateTabTitle(tabId, title, analyzing) {
     tabData.title = title;
     persistTabSnapshot();
   }
-  const tabEl = tabBar.querySelector(`.tab[data-tab-id="${tabId}"]`);
-  if (tabEl) {
-    const titleSpan = tabEl.querySelector('.tab-title');
-    if (titleSpan) {
-      titleSpan.textContent = title;
-      titleSpan.classList.toggle('analyzing', !!analyzing);
-    }
-  }
+  renderTabLabel(tabId, !!analyzing);
 }
 
 // --- Theme Init ---

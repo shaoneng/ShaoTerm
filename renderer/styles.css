@@ -225,6 +225,7 @@ body {
 
 .tab-title {
   flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 400;
   color: var(--text-secondary);
@@ -237,6 +238,29 @@ body {
 .tab.active .tab-title {
   color: var(--text-primary);
   font-weight: 500;
+}
+
+.tab-folder {
+  max-width: 92px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-primary) 74%, var(--bg-tertiary));
+  border: 0.5px solid var(--border);
+  font-size: 11px;
+  line-height: 1.25;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.tab.active .tab-folder {
+  color: var(--text-secondary);
+}
+
+.tab-folder.hidden {
+  display: none;
 }
 
 .tab-close {

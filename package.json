@@ -1,6 +1,6 @@
 {
   "name": "shaoterm",
-  "version": "1.1.21",
+  "version": "1.1.22",
   "description": "ShaoTerm: AI coding CLI multi-session manager with smart tab naming",
   "author": "shaoneng",
   "main": "main.js",
