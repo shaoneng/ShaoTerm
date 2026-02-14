@@ -46,15 +46,15 @@ xattr -dr com.apple.quarantine /Applications/ShaoTerm.app
 
 - **默认 AI 命令**：例如 `codex -m gpt-5.2-codex`、`claude`
 - **Base URL**：
-  - Anthropic 直连：`https://api.anthropic.com`
+  - OpenAI 直连：`https://api.openai.com`
   - VibeProxy 本地代理：`http://localhost:8317`
 - **API Key**：
-  - Anthropic 模式填写 API Key
+  - OpenAI 模式填写 API Key
   - VibeProxy 模式可留空（使用本地 OAuth 凭证）
 
 之后也可以通过标签栏右侧的"设置"按钮修改。
 
-> 新版支持 OpenAI-compatible 代理（如 VibeProxy）。当 Base URL 指向本地代理且默认命令是 Codex/GPT 模型时，标签命名与心跳汇总会优先通过该代理执行；失败时自动回退到本地规则摘要。
+> 标签命名与心跳汇总默认走 ChatGPT（OpenAI-compatible Chat Completions）。当 Base URL 指向本地代理（如 VibeProxy）时，会优先通过该代理执行；失败时自动回退到本地规则摘要。
 
 ### 3. 使用
 
@@ -75,7 +75,7 @@ xattr -dr com.apple.quarantine /Applications/ShaoTerm.app
 
 - **macOS** 10.13+ 或 **Windows** 10+
 - 已安装 [Codex CLI](https://github.com/openai/codex) 或 [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
-- 可选：Anthropic API Key（Anthropic 直连模式）
+- 可选：OpenAI API Key（OpenAI 直连模式）
 - 若使用 VibeProxy：需先完成 VibeProxy 的 Codex OAuth 登录
 
 ## 技术栈
