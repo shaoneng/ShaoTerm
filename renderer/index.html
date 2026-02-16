@@ -34,6 +34,13 @@
           <option value="30">30 分钟</option>
         </select>
       </div>
+      <div class="tab-quick-group">
+        <span class="tab-quick-label">日志</span>
+        <label class="tab-heartbeat-switch" title="启用归档指标日志">
+          <input type="checkbox" id="quick-archive-metrics-enabled">
+          <span>开</span>
+        </label>
+      </div>
       <button id="btn-settings" class="tab-quick-btn" title="设置">设置</button>
     </div>
   </div>
@@ -54,6 +61,10 @@
       <input type="text" id="settings-base-url" placeholder="https://api.openai.com">
       <label class="modal-label">API Key</label>
       <input type="password" id="settings-api-key" placeholder="sk-...">
+      <label class="modal-check">
+        <input type="checkbox" id="settings-archive-metrics">
+        <span>启用归档查询指标日志（调试）</span>
+      </label>
       <div class="modal-buttons">
         <button id="btn-settings-save">保存</button>
         <button id="btn-settings-cancel" class="btn-secondary">取消</button>

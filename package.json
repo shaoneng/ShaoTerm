@@ -1,11 +1,12 @@
 {
   "name": "shaoterm",
-  "version": "1.2.8",
+  "version": "1.2.10",
   "description": "ShaoTerm: AI coding CLI multi-session manager with smart tab naming",
   "author": "shaoneng",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test tests/*.test.js",
     "rebuild": "electron-rebuild",
     "postinstall": "node scripts/fix-node-pty-helper-perms.js",
     "dist": "node scripts/fix-node-pty-helper-perms.js && electron-builder",
@@ -56,6 +57,7 @@
     },
     "files": [
       "main.js",
+      "main/**/*",
       "preload.js",
       "renderer/**/*",
       "lib/**/*",

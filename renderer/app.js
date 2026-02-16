@@ -141,10 +141,12 @@ const settingsModal = document.getElementById('settings-modal');
 const settingsAiCommand = document.getElementById('settings-ai-command');
 const settingsBaseUrl = document.getElementById('settings-base-url');
 const settingsApiKey = document.getElementById('settings-api-key');
+const settingsArchiveMetrics = document.getElementById('settings-archive-metrics');
 const btnSettingsSave = document.getElementById('btn-settings-save');
 const btnSettingsCancel = document.getElementById('btn-settings-cancel');
 const quickHeartbeatEnabled = document.getElementById('quick-heartbeat-enabled');
 const quickHeartbeatInterval = document.getElementById('quick-heartbeat-interval');
+const quickArchiveMetricsEnabled = document.getElementById('quick-archive-metrics-enabled');
 const UI_REQUIRED_ELEMENTS = [
   ['tab-bar', tabBar],
   ['terminal-container', terminalContainer],
@@ -305,7 +307,8 @@ function normalizeRuntimeSettings(config = {}) {
     aiCommand: normalizeAiCommand(config.aiCommand),
     heartbeatEnabled: config.heartbeatEnabled !== false,
     heartbeatIntervalMs: normalizeHeartbeatIntervalMs(config.heartbeatIntervalMs),
-    heartbeatPreferSessionAi: config.heartbeatPreferSessionAi !== false
+    heartbeatPreferSessionAi: config.heartbeatPreferSessionAi !== false,
+    archiveMetricsEnabled: config.archiveMetricsEnabled === true
   };
 }
 
@@ -320,6 +323,10 @@ function applyQuickSettings(config = {}) {
       ? String(minutes)
       : '10';
   }
+
+  if (quickArchiveMetricsEnabled) {
+    quickArchiveMetricsEnabled.checked = config.archiveMetricsEnabled === true;
+  }
 }
 
 async function persistRuntimeSettings(config) {
@@ -329,6 +336,8 @@ async function persistRuntimeSettings(config) {
     heartbeatEnabled: normalized.heartbeatEnabled,
     heartbeatIntervalMs: normalized.heartbeatIntervalMs,
     heartbeatPreferSessionAi: normalized.heartbeatPreferSessionAi
+  }, {
+    archiveMetricsEnabled: normalized.archiveMetricsEnabled
   });
   applyQuickSettings(normalized);
   return normalized;
@@ -1166,7 +1175,8 @@ async function loadRuntimeSettings() {
       aiCommand: 'codex -m gpt-5.3-codex',
       heartbeatEnabled: true,
       heartbeatIntervalMs: 10 * 60 * 1000,
-      heartbeatPreferSessionAi: true
+      heartbeatPreferSessionAi: true,
+      archiveMetricsEnabled: false
     });
     aiCommand = fallback.aiCommand;
     applyQuickSettings(fallback);
@@ -1179,6 +1189,9 @@ async function openSettings() {
   settingsAiCommand.value = config.aiCommand;
   settingsBaseUrl.value = config.baseUrl || '';
   settingsApiKey.value = config.apiKey || '';
+  if (settingsArchiveMetrics) {
+    settingsArchiveMetrics.checked = config.archiveMetricsEnabled === true;
+  }
   settingsModal.classList.remove('hidden');
   settingsAiCommand.focus();
 }
@@ -1193,7 +1206,8 @@ async function saveSettings() {
     ...current,
     apiKey: settingsApiKey.value.trim(),
     baseUrl: settingsBaseUrl.value.trim(),
-    aiCommand: settingsAiCommand.value
+    aiCommand: settingsAiCommand.value,
+    archiveMetricsEnabled: settingsArchiveMetrics ? settingsArchiveMetrics.checked : current.archiveMetricsEnabled
   });
   await persistRuntimeSettings(nextConfig);
   closeSettings();
@@ -1211,8 +1225,17 @@ async function saveQuickHeartbeatSettings() {
   });
 }
 
+async function saveQuickArchiveMetricsSettings() {
+  if (!quickArchiveMetricsEnabled) return;
+  const current = normalizeRuntimeSettings(await window.api.getSettings());
+  await persistRuntimeSettings({
+    ...current,
+    archiveMetricsEnabled: !!quickArchiveMetricsEnabled.checked
+  });
+}
+
 function initializeQuickSettings() {
-  if (!quickHeartbeatEnabled || !quickHeartbeatInterval) return;
+  if (!quickHeartbeatEnabled || !quickHeartbeatInterval || !quickArchiveMetricsEnabled) return;
 
   quickHeartbeatEnabled.addEventListener('change', async () => {
     try {
@@ -1231,6 +1254,16 @@ function initializeQuickSettings() {
     } catch (err) {
       console.warn('Failed to update heartbeat interval:', err);
       showInAppNotice('心跳更新失败', '请稍后再试或在设置中手动修改。');
+    }
+  });
+
+  quickArchiveMetricsEnabled.addEventListener('change', async () => {
+    try {
+      await saveQuickArchiveMetricsSettings();
+      showInAppNotice('日志设置已更新', `归档指标日志${quickArchiveMetricsEnabled.checked ? '已启用' : '已关闭'}。`);
+    } catch (err) {
+      console.warn('Failed to update archive metrics flag:', err);
+      showInAppNotice('日志设置更新失败', '请稍后再试或在设置中手动修改。');
     }
   });
 }

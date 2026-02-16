@@ -3,6 +3,10 @@ const fs = require('fs');
 const path = require('path');
 const pty = require('node-pty');
 const topicDetector = require('./lib/topic-detector');
+const { resolveShellLaunch } = require('./main/platform-shell');
+const { attachNavigationGuards, buildBrowserSecurityOptions } = require('./main/security-policy');
+const { createArchiveStore } = require('./main/archive-store');
+const { shouldLogArchiveMetrics: shouldLogArchiveMetricsPolicy } = require('./main/archive-metrics');
 
 let win;
 const terminals = new Map();
@@ -28,6 +32,7 @@ const heartbeatRuntime = {
   enabled: true,
   intervalMs: DEFAULT_HEARTBEAT_INTERVAL_MS
 };
+let archiveMetricsEnabled = false;
 const HEARTBEAT_ERROR_PATTERN = /\b(error|failed|failure|exception|traceback|fatal|panic)\b|失败|错误|异常/i;
 const HEARTBEAT_SUCCESS_PATTERN = /\b(done|success|completed|finished)\b|成功|完成|已完成/i;
 const HEARTBEAT_WAITING_PATTERN = /是否继续|请确认|确认\?|are you sure|do you want to continue|yes\/no|y\/n|y\/N|Y\/n|confirm/i;
@@ -49,14 +54,6 @@ const MODEL_TOKEN_PATTERNS = [
   /\b(qwen[-a-z0-9._]+)\b/i,
   /\b(deepseek[-a-z0-9._]+)\b/i
 ];
-const archiveIndexState = {
-  loaded: false,
-  data: {
-    version: 1,
-    updatedAt: '',
-    sessions: {}
-  }
-};
 const tabStateRuntime = {
   loaded: false,
   data: {
@@ -67,6 +64,15 @@ const tabStateRuntime = {
   }
 };
 let hasAppliedInitialTerminalRelayout = false;
+const archiveStore = createArchiveStore({
+  driver: 'jsonl',
+  getArchiveRootDir,
+  resolveSessionIdByTab,
+  maxQueryDays: HEARTBEAT_MAX_QUERY_DAYS,
+  maxQueryLimit: HEARTBEAT_MAX_QUERY_LIMIT,
+  defaultQueryDays: HEARTBEAT_DEFAULT_QUERY_DAYS,
+  defaultQueryLimit: HEARTBEAT_DEFAULT_QUERY_LIMIT
+});
 
 function toUnpackedPath(filePath) {
   return filePath
@@ -622,10 +628,6 @@ function getArchiveRootDir() {
   return path.join(app.getPath('userData'), SESSION_ARCHIVE_DIRNAME);
 }
 
-function getArchiveIndexPath() {
-  return path.join(getArchiveRootDir(), 'index.json');
-}
-
 function ensureDirSync(dirPath) {
   try {
     fs.mkdirSync(dirPath, { recursive: true });
@@ -633,27 +635,6 @@ function ensureDirSync(dirPath) {
   } catch (err) {
     console.warn('[heartbeat-archive] Failed to ensure directory:', dirPath, err.message);
     return false;
-  }
-}
-
-function readJsonLines(filePath) {
-  try {
-    const raw = fs.readFileSync(filePath, 'utf8');
-    if (!raw.trim()) return [];
-    return raw
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          return JSON.parse(line);
-        } catch (err) {
-          return null;
-        }
-      })
-      .filter(Boolean);
-  } catch (err) {
-    return [];
   }
 }
 
@@ -670,43 +651,6 @@ function createSessionId(tabId) {
   return `${Date.now().toString(36)}-${tabPart}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function loadArchiveIndex() {
-  if (archiveIndexState.loaded) return archiveIndexState.data;
-
-  const indexPath = getArchiveIndexPath();
-  if (fs.existsSync(indexPath)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
-      if (parsed && typeof parsed === 'object' && parsed.sessions && typeof parsed.sessions === 'object') {
-        archiveIndexState.data = {
-          version: parsed.version || 1,
-          updatedAt: parsed.updatedAt || '',
-          sessions: parsed.sessions
-        };
-      }
-    } catch (err) {
-      console.warn('[heartbeat-archive] Failed to read index, recreating:', err.message);
-    }
-  }
-
-  archiveIndexState.loaded = true;
-  return archiveIndexState.data;
-}
-
-function persistArchiveIndex() {
-  const root = getArchiveRootDir();
-  if (!ensureDirSync(root)) return;
-  const indexPath = getArchiveIndexPath();
-  const data = loadArchiveIndex();
-  data.updatedAt = new Date().toISOString();
-
-  try {
-    fs.writeFileSync(indexPath, JSON.stringify(data, null, 2), 'utf8');
-  } catch (err) {
-    console.warn('[heartbeat-archive] Failed to write index:', err.message);
-  }
-}
-
 function ensureSessionArchiveFile(entry) {
   if (!entry) return false;
   if (entry.archiveFilePath && fs.existsSync(path.dirname(entry.archiveFilePath))) return true;
@@ -721,42 +665,6 @@ function ensureSessionArchiveFile(entry) {
     .slice(0, 80);
   entry.archiveFilePath = path.join(dayDir, `${safeSessionId}.jsonl`);
   return true;
-}
-
-function upsertArchiveIndex(entry, patch = {}) {
-  if (!entry || !entry.sessionId) return;
-
-  const data = loadArchiveIndex();
-  if (!data.sessions || typeof data.sessions !== 'object') {
-    data.sessions = {};
-  }
-
-  const existing = data.sessions[entry.sessionId] || {};
-  const archiveRoot = getArchiveRootDir();
-  const relativeArchivePath = entry.archiveFilePath
-    ? path.relative(archiveRoot, entry.archiveFilePath)
-    : (existing.archivePath || '');
-  const nextEventCount = (existing.eventCount || 0) + (patch.incrementEventCount ? 1 : 0);
-
-  data.sessions[entry.sessionId] = {
-    sessionId: entry.sessionId,
-    tabId: entry.tabId || existing.tabId || '',
-    cwd: entry.cwd || existing.cwd || '',
-    isAiSession: !!entry.isAiSession,
-    cli: (entry.sessionProfile && entry.sessionProfile.cli) || existing.cli || '',
-    provider: (entry.sessionProfile && entry.sessionProfile.provider) || existing.provider || '',
-    model: (entry.sessionProfile && entry.sessionProfile.model) || existing.model || '',
-    startedAt: entry.sessionStartedAt || existing.startedAt || new Date().toISOString(),
-    endedAt: patch.endedAt !== undefined ? patch.endedAt : (existing.endedAt || null),
-    lastAt: patch.lastAt || existing.lastAt || new Date().toISOString(),
-    eventCount: nextEventCount,
-    lastSummary: patch.lastSummary !== undefined ? patch.lastSummary : (existing.lastSummary || ''),
-    lastAnalysis: patch.lastAnalysis !== undefined ? patch.lastAnalysis : (existing.lastAnalysis || ''),
-    lastStatus: patch.lastStatus !== undefined ? patch.lastStatus : (existing.lastStatus || ''),
-    archivePath: relativeArchivePath
-  };
-
-  persistArchiveIndex();
 }
 
 function appendHeartbeatArchiveRecord(tabId, entry, eventType, payload = {}) {
@@ -803,17 +711,39 @@ function appendHeartbeatArchiveRecord(tabId, entry, eventType, payload = {}) {
     console.warn('[heartbeat-archive] Failed to append record:', err.message);
     return false;
   }
+  try {
+    archiveStore.append(record, { filePath: entry.archiveFilePath });
+  } catch (err) {
+    console.warn('[heartbeat-archive] Failed to update in-memory index:', err.message);
+  }
 
   entry.archiveRecordCount = (entry.archiveRecordCount || 0) + 1;
   entry.lastArchiveRecordAt = nowIso;
-  upsertArchiveIndex(entry, {
-    incrementEventCount: true,
-    lastAt: nowIso,
-    endedAt: payload.endedAt,
-    lastSummary: summary,
-    lastAnalysis: analysis,
-    lastStatus: status
-  });
+  try {
+    const archiveRoot = getArchiveRootDir();
+    const relativeArchivePath = entry.archiveFilePath
+      ? path.relative(archiveRoot, entry.archiveFilePath)
+      : '';
+    archiveStore.upsertSessionMeta({
+      sessionId: entry.sessionId,
+      tabId: entry.tabId || tabId,
+      cwd: entry.cwd || '',
+      isAiSession: !!entry.isAiSession,
+      cli: entry.sessionProfile && entry.sessionProfile.cli,
+      provider: entry.sessionProfile && entry.sessionProfile.provider,
+      model: entry.sessionProfile && entry.sessionProfile.model,
+      startedAt: entry.sessionStartedAt,
+      endedAt: payload.endedAt,
+      lastAt: nowIso,
+      incrementEventCount: true,
+      lastSummary: summary,
+      lastAnalysis: analysis,
+      lastStatus: status,
+      archivePath: relativeArchivePath
+    });
+  } catch (err) {
+    console.warn('[heartbeat-archive] Failed to persist archive index meta:', err.message);
+  }
   return true;
 }
 
@@ -860,101 +790,54 @@ function cleanupOldHeartbeatArchives() {
   }
 }
 
-function collectArchiveFiles(days) {
-  const root = getArchiveRootDir();
-  if (!fs.existsSync(root)) return [];
-
-  const now = Date.now();
-  const maxAgeMs = days * 24 * 60 * 60 * 1000;
-  const dayDirs = fs.readdirSync(root, { withFileTypes: true })
-    .filter((item) => item.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(item.name))
-    .map((item) => item.name)
-    .filter((stamp) => {
-      const ts = new Date(`${stamp}T00:00:00Z`).getTime();
-      return Number.isFinite(ts) && now - ts <= maxAgeMs;
-    })
-    .sort((a, b) => b.localeCompare(a));
-
-  const files = [];
-  for (const day of dayDirs) {
-    const dirPath = path.join(root, day);
-    const dayFiles = fs.readdirSync(dirPath, { withFileTypes: true })
-      .filter((item) => item.isFile() && item.name.endsWith('.jsonl'))
-      .map((item) => path.join(dirPath, item.name));
-    files.push(...dayFiles);
-  }
-  return files;
-}
-
 function resolveSessionIdByTab(tabId) {
   const entry = terminals.get(tabId);
   return entry && entry.sessionId ? entry.sessionId : '';
 }
 
+function isLegacyArchiveQueryEnabled() {
+  return process.env.ARCHIVE_QUERY_LEGACY === '1';
+}
+
+function getArchiveQueryMode() {
+  return isLegacyArchiveQueryEnabled() ? 'legacy' : 'auto';
+}
+
+function shouldLogArchiveMetrics() {
+  return shouldLogArchiveMetricsPolicy({
+    settingsEnabled: archiveMetricsEnabled,
+    env: process.env
+  });
+}
+
 function queryHeartbeatArchive(options = {}) {
-  const days = clampInteger(options.days, 1, HEARTBEAT_MAX_QUERY_DAYS, HEARTBEAT_DEFAULT_QUERY_DAYS);
-  const limit = clampInteger(options.limit, 1, HEARTBEAT_MAX_QUERY_LIMIT, HEARTBEAT_DEFAULT_QUERY_LIMIT);
-  const keyword = sanitizeArchiveLine(options.keyword, 120).toLowerCase();
-  const eventType = sanitizeArchiveLine(options.eventType, 40);
-  const requestedTabId = sanitizeArchiveLine(options.tabId, 80);
-  const cwd = sanitizeArchiveLine(options.cwd, 280);
-  let sessionId = sanitizeArchiveLine(options.sessionId, 120);
-
-  if (!sessionId && requestedTabId) {
-    sessionId = resolveSessionIdByTab(requestedTabId);
+  const queryMode = getArchiveQueryMode();
+  const result = archiveStore.query({
+    ...(options || {}),
+    queryMode
+  });
+  const stats = result && result.stats ? result.stats : null;
+  if (stats && shouldLogArchiveMetrics()) {
+    console.log(
+      `[heartbeat-archive] query mode=${stats.queryMode} total=${result.total} ` +
+      `files=${stats.filesScanned} usedIndex=${stats.usedIndex} elapsedMs=${stats.elapsedMs}`
+    );
   }
-
-  const files = [];
-  const archiveRoot = getArchiveRootDir();
-  if (sessionId) {
-    const index = loadArchiveIndex();
-    const meta = index.sessions && index.sessions[sessionId];
-    if (meta && meta.archivePath) {
-      const targetFile = path.join(archiveRoot, meta.archivePath);
-      if (fs.existsSync(targetFile)) {
-        files.push(targetFile);
-      }
-    }
-  }
-  if (files.length === 0) {
-    files.push(...collectArchiveFiles(days));
-  }
-
-  const matched = [];
-  for (const filePath of files) {
-    const records = readJsonLines(filePath);
-    for (const record of records) {
-      if (!record || typeof record !== 'object') continue;
-      if (sessionId && record.sessionId !== sessionId) continue;
-      if (requestedTabId && record.tabId !== requestedTabId) continue;
-      if (cwd && !String(record.cwd || '').includes(cwd)) continue;
-      if (eventType && record.eventType !== eventType) continue;
-      if (keyword) {
-        const haystack = `${record.summary || ''} ${record.analysis || ''} ${record.status || ''}`.toLowerCase();
-        if (!haystack.includes(keyword)) continue;
-      }
-      matched.push(record);
-    }
-  }
-
-  matched.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
-  return {
-    records: matched.slice(0, limit),
-    total: matched.length,
-    query: {
-      days,
-      limit,
-      sessionId,
-      tabId: requestedTabId,
-      cwd,
-      eventType,
-      keyword
-    }
-  };
+  return result;
 }
 
 async function summarizeHeartbeatArchive(options = {}) {
-  const result = queryHeartbeatArchive(options);
+  const queryMode = getArchiveQueryMode();
+  const { result, timeline, stats } = archiveStore.summarizeInput({
+    ...(options || {}),
+    queryMode
+  });
+  if (stats && shouldLogArchiveMetrics()) {
+    console.log(
+      `[heartbeat-archive] summarize mode=${stats.queryMode} total=${result.total} ` +
+      `files=${stats.filesScanned} usedIndex=${stats.usedIndex} elapsedMs=${stats.elapsedMs}`
+    );
+  }
   if (result.records.length === 0) {
     const requestedTabId = sanitizeArchiveLine(options.tabId, 80);
     if (requestedTabId) {
@@ -984,12 +867,6 @@ async function summarizeHeartbeatArchive(options = {}) {
     };
   }
 
-  const timeline = result.records
-    .slice(0, 24)
-    .reverse()
-    .map((record) => `[${record.ts}] ${record.status || '进行中'} ${record.summary || ''} ${record.analysis || ''}`)
-    .join('\n');
-
   const report = await topicDetector.analyzeHeartbeat(timeline);
   return {
     ...result,
@@ -1007,6 +884,11 @@ function normalizeHeartbeatIntervalMs(value) {
 function applyHeartbeatConfig(config = {}) {
   heartbeatRuntime.enabled = config.heartbeatEnabled !== false;
   heartbeatRuntime.intervalMs = normalizeHeartbeatIntervalMs(config.heartbeatIntervalMs);
+}
+
+function applyRuntimeSettings(config = {}) {
+  applyHeartbeatConfig(config);
+  archiveMetricsEnabled = config.archiveMetricsEnabled === true;
 }
 
 async function runHeartbeat(tabId, entry, options = {}) {
@@ -1130,28 +1012,16 @@ function createWindow() {
     minHeight: 400,
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1e1e1e',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      enableRemoteModule: false,
-      // Keep file:// local resource compatibility for packaged renderer assets.
-      webSecurity: false
-    }
+    webPreferences: buildBrowserSecurityOptions({
+      preloadPath: path.join(__dirname, 'preload.js')
+    })
   });
 
-  // Prevent default file drop behavior (opening files in window)
-  win.webContents.on('will-navigate', (event, url) => {
-    event.preventDefault();
-    // If it's a file URL from drag-drop, extract the path and send to renderer
-    if (url.startsWith('file://')) {
-      const filePath = decodeURIComponent(url.replace('file://', ''));
-      win.webContents.send('file:drop', { paths: [filePath] });
+  attachNavigationGuards(win, {
+    onFileDrop: (payload) => {
+      if (!win || win.isDestroyed()) return;
+      win.webContents.send('file:drop', payload);
     }
-  });
-
-  win.webContents.on('will-attach-webview', (event) => {
-    event.preventDefault();
   });
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -1210,8 +1080,15 @@ ipcMain.handle('notify:info', async (event, { title, body }) => {
 ipcMain.handle('terminal:create', (event, payload = {}) => {
   const { tabId, cwd, autoCommand } = payload;
   const options = payload && typeof payload.options === 'object' ? payload.options : {};
-  const shell = process.env.SHELL || '/bin/zsh';
   const shellMode = sanitizeArchiveLine(options.shellMode, 20).toLowerCase();
+  const shellResolution = resolveShellLaunch({
+    platform: process.platform,
+    env: process.env,
+    preferredShell: process.env.SHELL,
+    shellMode
+  });
+  const shell = shellResolution.shell;
+  const shellArgs = Array.isArray(shellResolution.args) ? shellResolution.args : [];
   const autoRunCommand = options.autoRunCommand !== false;
   const cwdResolution = resolveTerminalCwd(cwd);
   const resolvedCwd = cwdResolution.resolvedCwd;
@@ -1221,34 +1098,23 @@ ipcMain.handle('terminal:create', (event, payload = {}) => {
     .slice(0, 80);
 
   console.log(
-    `[terminal:create] tab=${tabId} shell=${shell} cwd="${resolvedCwd}"` +
+    `[terminal:create] tab=${tabId} shell=${shell} args="${shellArgs.join(' ')}" cwd="${resolvedCwd}"` +
     (autoCommandPreview ? ` auto="${autoCommandPreview}"` : '')
   );
+  if (shellResolution.isFallback) {
+    console.warn(`[terminal] Shell fallback for tab ${tabId}: source=${shellResolution.resolvedFrom} reason=${shellResolution.fallbackReason || 'non_preferred_shell'}`);
+  }
   if (cwdResolution.fallbackApplied) {
     console.warn(`[terminal] CWD fallback for tab ${tabId}: requested="${cwdResolution.requestedCwd}" resolved="${resolvedCwd}"`);
   }
   let ptyProcess;
   try {
-    const shellArgs = [];
-    const lowerShell = shell.toLowerCase();
-    if (shellMode === 'fast') {
-      if (lowerShell.endsWith('/zsh') || lowerShell === 'zsh') {
-        shellArgs.push('-f');
-      } else if (lowerShell.endsWith('/bash') || lowerShell === 'bash') {
-        shellArgs.push('--noprofile', '--norc');
-      } else {
-        shellArgs.push('-l');
-      }
-    } else {
-      shellArgs.push('-l');
-    }
-
     ptyProcess = pty.spawn(shell, shellArgs, {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
       cwd: resolvedCwd,
-      env: { ...process.env, TERM: 'xterm-256color' }
+      env: { ...process.env, ...(shellResolution.envPatch || {}), TERM: 'xterm-256color' }
     });
     console.log(`[terminal:create] spawn ok tab=${tabId}`);
   } catch (err) {
@@ -1520,13 +1386,14 @@ ipcMain.handle('topic:refresh', async (event, options = {}) => {
 // --- IPC: Settings ---
 
 ipcMain.handle('settings:get', () => {
-  applyHeartbeatConfig(topicDetector.getConfig());
-  return topicDetector.getConfig();
+  const config = topicDetector.getConfig();
+  applyRuntimeSettings(config);
+  return config;
 });
 
-ipcMain.handle('settings:save', (event, { apiKey, baseUrl, aiCommand, heartbeat }) => {
-  topicDetector.configure(apiKey, baseUrl, aiCommand, heartbeat || {});
-  applyHeartbeatConfig(topicDetector.getConfig());
+ipcMain.handle('settings:save', (event, { apiKey, baseUrl, aiCommand, heartbeat, runtime }) => {
+  topicDetector.configure(apiKey, baseUrl, aiCommand, heartbeat || {}, runtime || {});
+  applyRuntimeSettings(topicDetector.getConfig());
   restartAllHeartbeatTimers();
   return { success: true };
 });
@@ -1683,7 +1550,7 @@ function buildMenu() {
 
 app.whenReady().then(() => {
   ensureNodePtySpawnHelperExecutable();
-  applyHeartbeatConfig(topicDetector.getConfig());
+  applyRuntimeSettings(topicDetector.getConfig());
   cleanupOldHeartbeatArchives();
   createWindow();
 });
