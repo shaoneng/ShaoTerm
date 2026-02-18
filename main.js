@@ -174,6 +174,16 @@ function shouldNotifyConfirmPrompt(tabId, plainText) {
   return true;
 }
 
+function hasUserResponseInput(input) {
+  const text = String(input || '');
+  if (!text) return false;
+  for (const ch of text) {
+    if (ch === '\r' || ch === '\n') return true;
+    if (ch >= ' ' && ch !== '\u007f') return true;
+  }
+  return false;
+}
+
 function createHeartbeatSignature(rawBuffer) {
   return stripAnsiForDetection(rawBuffer || '')
     .replace(/\s+/g, ' ')
@@ -1148,7 +1158,9 @@ ipcMain.handle('terminal:create', (event, payload = {}) => {
     sessionProfile: null,
     analysisBuffer: '',
     inputLineBuffer: '',
-    inputEscapeSequence: false
+    inputEscapeSequence: false,
+    confirmPending: false,
+    confirmPrompt: ''
   };
   entry.sessionProfile = ensureSessionProfile(entry, entry.autoCommand);
   terminals.set(tabId, entry);
@@ -1189,6 +1201,8 @@ ipcMain.handle('terminal:create', (event, payload = {}) => {
     }
 
     if (shouldNotifyConfirmPrompt(tabId, plain) && win && !win.isDestroyed()) {
+      entry.confirmPending = true;
+      entry.confirmPrompt = sanitizeArchiveLine(plain.slice(-160).trim(), 160);
       appendHeartbeatArchiveRecord(tabId, entry, 'confirm_prompt', {
         summary: '检测到确认类提示',
         analysis: sanitizeArchiveLine(plain.slice(-220), 220),
@@ -1198,7 +1212,7 @@ ipcMain.handle('terminal:create', (event, payload = {}) => {
       });
       win.webContents.send('terminal:confirm-needed', {
         tabId,
-        prompt: plain.slice(-160).trim()
+        prompt: entry.confirmPrompt
       });
     }
   });
@@ -1297,6 +1311,24 @@ ipcMain.on('terminal:data', (event, { tabId, data }) => {
 
     if (profileChanged) {
       emitSessionProfileUpdate(tabId, entry, 'user_input');
+    }
+
+    if (entry.confirmPending && hasUserResponseInput(incoming)) {
+      entry.confirmPending = false;
+      entry.confirmPrompt = '';
+      appendHeartbeatArchiveRecord(tabId, entry, 'confirm_resolved', {
+        summary: '检测到会话输入，待确认标记已清除',
+        analysis: sanitizeArchiveLine(incoming.replace(/[\r\n]+/g, ' ').trim(), 180),
+        reason: 'user_input',
+        source: 'detector',
+        status: '进行中'
+      });
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('terminal:confirm-cleared', {
+          tabId,
+          reason: 'user_input'
+        });
+      }
     }
     entry.pty.write(data);
   }
@@ -1486,6 +1518,13 @@ function buildMenu() {
           accelerator: 'CmdOrCtrl+Shift+H',
           click: () => {
             if (win) win.webContents.send('shortcut:show-heartbeat-archive');
+          }
+        },
+        {
+          label: '跳转到下一个待确认会话',
+          accelerator: 'CmdOrCtrl+Shift+.',
+          click: () => {
+            if (win) win.webContents.send('shortcut:next-confirm-tab');
           }
         },
         { type: 'separator' },

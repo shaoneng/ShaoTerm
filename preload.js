@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld('api', {
   onTerminalConfirmNeeded: (callback) => {
     ipcRenderer.on('terminal:confirm-needed', (event, payload) => callback(payload));
   },
+  onTerminalConfirmCleared: (callback) => {
+    ipcRenderer.on('terminal:confirm-cleared', (event, payload) => callback(payload));
+  },
 
   // Topic detection
   refreshTopics: (options) => ipcRenderer.invoke('topic:refresh', options || {}),
@@ -61,6 +64,9 @@ contextBridge.exposeInMainWorld('api', {
   },
   onShowHeartbeatArchive: (callback) => {
     ipcRenderer.on('shortcut:show-heartbeat-archive', () => callback());
+  },
+  onNextConfirmTab: (callback) => {
+    ipcRenderer.on('shortcut:next-confirm-tab', () => callback());
   },
   onSwitchTab: (callback) => {
     ipcRenderer.on('shortcut:switch-tab', (event, payload) => callback(payload));

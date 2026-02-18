@@ -1,4 +1,4 @@
-/* global TerminalManager */
+/* global TerminalManager, ConfirmHintUtils */
 
 (function appRendererScope() {
 
@@ -119,7 +119,45 @@ const terminalManager = (() => {
   console.warn('TerminalManager global is missing, fallback to stub manager.');
   return createFallbackTerminalManager();
 })();
-const tabs = []; // { id, title, manuallyRenamed, cwd, autoCommand, heartbeatStatus, heartbeatSummary, heartbeatAnalysis, heartbeatAt, sessionReady, sessionState, sessionStartPromise, pendingAutoCommand }
+const confirmHintUtils = (() => {
+  const fallback = {
+    isConfirmPending(tabData) {
+      return !!(tabData && tabData.confirmPending === true);
+    },
+    getConfirmPendingTabIds(tabsList) {
+      if (!Array.isArray(tabsList)) return [];
+      return tabsList
+        .filter((tab) => !!(tab && tab.confirmPending === true))
+        .map((tab) => String((tab && tab.id) || '').trim())
+        .filter(Boolean);
+    },
+    formatConfirmQueueLabel(count) {
+      const normalized = Number.isFinite(Number(count)) ? Math.max(0, Math.floor(Number(count))) : 0;
+      if (normalized <= 0) return '';
+      if (normalized > 9) return '待确认 9+';
+      return `待确认 ${normalized}`;
+    },
+    pickNextConfirmTabId(tabsList, currentTabId) {
+      const ids = Array.isArray(tabsList)
+        ? tabsList
+          .filter((tab) => !!(tab && tab.confirmPending === true))
+          .map((tab) => String((tab && tab.id) || '').trim())
+          .filter(Boolean)
+        : [];
+      if (ids.length === 0) return '';
+      const current = String(currentTabId || '').trim();
+      const index = ids.indexOf(current);
+      if (index < 0) return ids[0];
+      return ids[(index + 1) % ids.length] || ids[0];
+    }
+  };
+  if (typeof ConfirmHintUtils === 'object' && ConfirmHintUtils) {
+    return ConfirmHintUtils;
+  }
+  console.warn('[tab-confirm] ConfirmHintUtils is missing, fallback to built-in helpers.');
+  return fallback;
+})();
+const tabs = []; // { id, title, manuallyRenamed, cwd, autoCommand, heartbeatStatus, heartbeatSummary, heartbeatAnalysis, heartbeatAt, confirmPending, confirmPrompt, confirmDetectedAt, sessionReady, sessionState, sessionStartPromise, pendingAutoCommand }
 const pendingTopicRefreshTabs = new Set();
 let activeTabId = null;
 let inAppNoticeContainer = null;
@@ -136,6 +174,7 @@ const btnAddTerminal = document.getElementById('btn-add-terminal');
 const btnAddAi = document.getElementById('btn-add-ai');
 const terminalContainer = document.getElementById('terminal-container');
 const btnSettings = document.getElementById('btn-settings');
+const btnConfirmQueue = document.getElementById('btn-confirm-queue');
 const btnScrollBottom = document.getElementById('btn-scroll-bottom');
 const settingsModal = document.getElementById('settings-modal');
 const settingsAiCommand = document.getElementById('settings-ai-command');
@@ -152,6 +191,7 @@ const UI_REQUIRED_ELEMENTS = [
   ['terminal-container', terminalContainer],
   ['btn-add-terminal', btnAddTerminal],
   ['btn-add-ai', btnAddAi],
+  ['btn-confirm-queue', btnConfirmQueue],
   ['btn-settings', btnSettings],
   ['settings-modal', settingsModal]
 ];
@@ -161,6 +201,7 @@ const TERMINAL_BOTTOM_SNAP_LINES = 2;
 const TERMINAL_CREATE_TIMEOUT_MS = 12000;
 const STARTUP_PHASE_DELAY_MS = 0;
 const STARTUP_FAST_SHELL_MODE = 'fast';
+const TAB_CONFIRM_BADGE_TEXT = '待确认';
 const HEARTBEAT_STATUS_TEXT = {
   unknown: '暂无心跳',
   running: '进行中',
@@ -251,6 +292,82 @@ function renderTabHeartbeat(tabId) {
   tabEl.title = formatHeartbeatTooltip(tabData);
 }
 
+function syncConfirmQueueButton() {
+  if (!btnConfirmQueue) return;
+  const pendingIds = confirmHintUtils.getConfirmPendingTabIds(tabs);
+  const count = pendingIds.length;
+  const label = confirmHintUtils.formatConfirmQueueLabel(count);
+
+  btnConfirmQueue.textContent = label || '待确认 0';
+  btnConfirmQueue.classList.toggle('hidden', count === 0);
+  if (count > 0) {
+    btnConfirmQueue.title = count === 1
+      ? '1 个会话正在等待确认，点击切换到该会话'
+      : `${count} 个会话正在等待确认，点击切换到下一个会话`;
+  } else {
+    btnConfirmQueue.title = '当前没有待确认会话';
+  }
+}
+
+function renderTabConfirmBadge(tabId) {
+  const tabData = tabs.find((t) => t.id === tabId);
+  if (!tabData) return;
+  const tabEl = tabBar.querySelector(`.tab[data-tab-id="${tabId}"]`);
+  if (!tabEl) return;
+
+  const badgeEl = tabEl.querySelector('.tab-confirm-badge');
+  const shouldShowBadge = confirmHintUtils.isConfirmPending(tabData);
+  tabEl.classList.toggle('tab-confirm-pending', shouldShowBadge);
+
+  if (badgeEl) {
+    badgeEl.textContent = TAB_CONFIRM_BADGE_TEXT;
+    badgeEl.classList.toggle('hidden', !shouldShowBadge);
+    if (shouldShowBadge && tabData.confirmPrompt) {
+      badgeEl.title = tabData.confirmPrompt;
+    } else {
+      badgeEl.removeAttribute('title');
+    }
+  }
+
+  syncConfirmQueueButton();
+}
+
+function clearTabConfirmPending(tabId, options = {}) {
+  const tabData = tabs.find((t) => t.id === tabId);
+  if (!tabData || !tabData.confirmPending) return false;
+
+  tabData.confirmPending = false;
+  tabData.confirmPrompt = '';
+  tabData.confirmDetectedAt = '';
+
+  if (!options.keepHeartbeatWaiting && tabData.heartbeatStatus === 'waiting') {
+    const summary = String(tabData.heartbeatSummary || '');
+    if (!summary || summary === '检测到确认提示' || summary === '会话等待输入') {
+      tabData.heartbeatSummary = '会话进行中';
+    }
+    tabData.heartbeatStatus = 'running';
+    tabData.heartbeatAt = new Date().toISOString();
+  }
+
+  renderTabHeartbeat(tabId);
+  renderTabConfirmBadge(tabId);
+  return true;
+}
+
+function focusNextConfirmTab() {
+  const nextTabId = confirmHintUtils.pickNextConfirmTabId(tabs, activeTabId);
+  if (!nextTabId) {
+    showInAppNotice('待确认队列', '当前没有待确认会话。');
+    return;
+  }
+
+  switchToTabById(nextTabId);
+  const targetTab = tabs.find((tab) => tab.id === nextTabId);
+  if (targetTab) {
+    showInAppNotice('已定位待确认会话', `会话：${targetTab.title}`);
+  }
+}
+
 function updateTabHeartbeatMeta(tabId, patch = {}) {
   const tabData = tabs.find((t) => t.id === tabId);
   if (!tabData) return;
@@ -268,7 +385,13 @@ function updateTabHeartbeatMeta(tabId, patch = {}) {
   } else if (patch.status !== undefined || patch.summary !== undefined || patch.analysis !== undefined) {
     tabData.heartbeatAt = new Date().toISOString();
   }
+  if (patch.status !== undefined && tabData.confirmPending && tabData.heartbeatStatus !== 'waiting') {
+    tabData.confirmPending = false;
+    tabData.confirmPrompt = '';
+    tabData.confirmDetectedAt = '';
+  }
   renderTabHeartbeat(tabId);
+  renderTabConfirmBadge(tabId);
 }
 
 function updateScrollBottomButton(distanceToBottom) {
@@ -859,7 +982,10 @@ async function createNewTab(options = {}) {
       heartbeatStatus: 'unknown',
       heartbeatSummary: '',
       heartbeatAnalysis: '',
-      heartbeatAt: ''
+      heartbeatAt: '',
+      confirmPending: false,
+      confirmPrompt: '',
+      confirmDetectedAt: ''
     };
     tabs.push(tabData);
 
@@ -878,6 +1004,10 @@ async function createNewTab(options = {}) {
     const folderSpan = document.createElement('span');
     folderSpan.className = 'tab-folder hidden';
 
+    const confirmBadge = document.createElement('span');
+    confirmBadge.className = 'tab-confirm-badge hidden';
+    confirmBadge.textContent = TAB_CONFIRM_BADGE_TEXT;
+
     const closeBtn = document.createElement('span');
     closeBtn.className = 'tab-close';
     closeBtn.textContent = '\u00d7';
@@ -885,11 +1015,13 @@ async function createNewTab(options = {}) {
     tabEl.appendChild(heartbeatDot);
     tabEl.appendChild(titleSpan);
     tabEl.appendChild(folderSpan);
+    tabEl.appendChild(confirmBadge);
     tabEl.appendChild(closeBtn);
     // Insert before both add buttons
     tabBar.insertBefore(tabEl, btnAddTerminal);
     renderTabLabel(tabId);
     renderTabHeartbeat(tabId);
+    renderTabConfirmBadge(tabId);
 
     tabEl.addEventListener('click', (e) => {
       if (!e.target.classList.contains('tab-close')) {
@@ -1048,6 +1180,7 @@ async function closeTab(tabId) {
     const newIndex = Math.min(index, tabs.length - 1);
     switchToTabById(tabs[newIndex].id);
   }
+  syncConfirmQueueButton();
   persistTabSnapshot();
 }
 
@@ -1441,6 +1574,7 @@ registerApiListener('onTerminalOutput', ({ tabId, data }) => {
 });
 
 registerApiListener('onTerminalClosed', ({ tabId }) => {
+  clearTabConfirmPending(tabId, { keepHeartbeatWaiting: true });
   const tabData = tabs.find((t) => t.id === tabId);
   if (tabData) {
     updateTabHeartbeatMeta(tabId, {
@@ -1478,6 +1612,9 @@ registerApiListener('onTerminalConfirmNeeded', ({ tabId, prompt }) => {
   if (!tabData) return;
 
   const compactPrompt = (prompt || '').replace(/\s+/g, ' ').trim();
+  tabData.confirmPending = true;
+  tabData.confirmPrompt = compactPrompt.slice(0, 160);
+  tabData.confirmDetectedAt = new Date().toISOString();
   updateTabHeartbeatMeta(tabId, {
     status: 'waiting',
     summary: compactPrompt ? '检测到确认提示' : '会话等待输入',
@@ -1485,6 +1622,10 @@ registerApiListener('onTerminalConfirmNeeded', ({ tabId, prompt }) => {
     at: new Date().toISOString()
   });
   debugLog(`[heartbeat][confirm-signal] ${tabData.title}: ${compactPrompt || 'waiting for input'}`);
+});
+
+registerApiListener('onTerminalConfirmCleared', ({ tabId }) => {
+  clearTabConfirmPending(tabId);
 });
 
 registerApiListener('onTopicStatus', ({ tabId, status, topic }) => {
@@ -1540,6 +1681,9 @@ registerApiListener('onShowHeartbeatArchive', runAsyncSafely(
   () => showHeartbeatArchiveDigestForActiveTab(),
   '提取心跳归档失败'
 ));
+registerApiListener('onNextConfirmTab', () => {
+  focusNextConfirmTab();
+});
 registerApiListener('onSwitchTab', ({ index }) => switchToTabByIndex(index));
 registerApiListener('onIncreaseFont', () => {
   debugLog('onIncreaseFont shortcut triggered');
@@ -1578,6 +1722,9 @@ bindClickSafely(btnSettings, runAsyncSafely(
   () => openSettings(),
   '打开设置失败'
 ), 'btn-settings');
+bindClickSafely(btnConfirmQueue, () => {
+  focusNextConfirmTab();
+}, 'btn-confirm-queue');
 bindClickSafely(btnSettingsSave, runAsyncSafely(
   () => saveSettings(),
   '保存设置失败'
@@ -1600,6 +1747,7 @@ if (settingsModal) {
 }
 
 terminalManager.onScrollStateChange(handleTerminalScrollStateChange);
+syncConfirmQueueButton();
 
 // --- Init ---
 

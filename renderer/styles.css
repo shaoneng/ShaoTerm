@@ -161,7 +161,7 @@ body {
 .tab {
   height: 28px;
   min-width: 120px;
-  max-width: 200px;
+  max-width: 240px;
   background: transparent;
   border: none;
   border-radius: var(--radius-md);
@@ -261,6 +261,31 @@ body {
 
 .tab-folder.hidden {
   display: none;
+}
+
+.tab-confirm-badge {
+  max-width: 74px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 0.5px solid color-mix(in srgb, var(--warning) 58%, var(--border));
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+  color: color-mix(in srgb, var(--warning) 82%, var(--text-primary));
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.tab-confirm-badge.hidden {
+  display: none;
+}
+
+.tab.tab-confirm-pending .tab-heartbeat-dot {
+  background: var(--warning);
+  opacity: 1;
+  animation: waitingPulse 1.25s ease-in-out infinite;
 }
 
 .tab-close {
@@ -379,6 +404,19 @@ body {
 .tab-quick-btn:hover {
   background: var(--hover);
   color: var(--text-primary);
+}
+
+.tab-quick-btn-confirm {
+  color: color-mix(in srgb, var(--warning) 80%, var(--text-primary));
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+}
+
+.tab-quick-btn-confirm:not(.hidden) {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+}
+
+.tab-quick-btn-confirm.hidden {
+  display: none;
 }
 
 /* Terminal Container */
@@ -702,6 +740,16 @@ body {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes waitingPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--warning) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning) 28%, transparent);
   }
 }
 
